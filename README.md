@@ -1,4 +1,4 @@
-# Windows Security Audit Tool v2.0 - Modular Architecture
+# Windows Security Audit Tool - Modular Architecture
 
 Comprehensive security audit system for Windows 10/11 with framework-specific modules supporting CIS, NIST, STIG, and Microsoft Security Baselines.
 
