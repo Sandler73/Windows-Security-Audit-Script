@@ -6,322 +6,516 @@
     Contains extensive checks mapped to Windows 10/11 STIG requirements V2R8 (60+ checks).
     Includes DoD-specific security requirements and military-grade hardening.
 #>
+# Module-STIG.ps1
+# DISA STIG (Security Technical Implementation Guide) Compliance Module
+# Based on Windows 10/11 and Server STIGs
 
-function Invoke-STIGChecks {
-    param([string]$Severity = 'ALL')
-    
-    $results = @{Passed=@(); Failed=@(); Warnings=@(); Info=@()}
-    
-    function Add-Check {
-        param($Category,$Status,$Message,$Details="",$Current="N/A",$Expected="N/A",$Sev="Medium",$Remediation="",$VulnID="")
-        
-        if($Severity -ne 'ALL' -and $Severity -ne $Sev){return}
-        
-        $result = [PSCustomObject]@{
-            Category=$Category; Status=$Status; Message=$Message; Details=$Details
-            CurrentValue=$Current; ExpectedValue=$Expected; Severity=$Sev
-            Remediation=$Remediation; Frameworks="STIG $VulnID"
-        }
-        
-        $results.$Status += $result
+param(
+    [Parameter(Mandatory=$false)]
+    [hashtable]$SharedData = @{}
+)
+
+$moduleName = "STIG"
+$results = @()
+
+# Helper function to add results
+function Add-Result {
+    param($Category, $Status, $Message, $Details = "", $Remediation = "")
+    $script:results += [PSCustomObject]@{
+        Module = $moduleName
+        Category = $Category
+        Status = $Status
+        Message = $Message
+        Details = $Details
+        Remediation = $Remediation
+        Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     }
-    
-    Write-Host "Running DISA STIG Checks..." -ForegroundColor Cyan
-    
-    # V-220697: Local volumes must use NTFS
-    $volumes = Get-Volume | Where-Object{$_.DriveType -eq 'Fixed' -and $_.DriveLetter}
-    foreach($vol in $volumes){
-        if($vol.FileSystemType -eq 'NTFS'){
-            Add-Check -Category "File System" -Status "Passed" -Message "Drive $($vol.DriveLetter): uses NTFS" `
-                -Current "NTFS" -Expected "NTFS" -Sev "High" -VulnID "V-220697"
+}
+
+Write-Host "`n[STIG] Starting DISA STIG compliance checks..." -ForegroundColor Cyan
+
+# ============================================================================
+# STIG CAT I (Category I - High Severity)
+# ============================================================================
+Write-Host "[STIG] Checking Category I (High Severity) Requirements..." -ForegroundColor Yellow
+
+# V-220697: Secure Boot must be enabled
+try {
+    $secureBoot = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue
+    if ($secureBoot -eq $true) {
+        Add-Result -Category "STIG - CAT I" -Status "Pass" `
+            -Message "Secure Boot is enabled" `
+            -Details "V-220697: Protects against bootkits and rootkits"
+    } elseif ($secureBoot -eq $false) {
+        Add-Result -Category "STIG - CAT I" -Status "Fail" `
+            -Message "Secure Boot is disabled" `
+            -Details "V-220697: CAT I - Enable Secure Boot in UEFI firmware" `
+            -Remediation "Enable Secure Boot in BIOS/UEFI settings"
+    } else {
+        Add-Result -Category "STIG - CAT I" -Status "Warning" `
+            -Message "Cannot determine Secure Boot status (Legacy BIOS?)" `
+            -Details "V-220697: UEFI with Secure Boot is required"
+    }
+} catch {
+    Add-Result -Category "STIG - CAT I" -Status "Info" `
+        -Message "Unable to check Secure Boot status" `
+        -Details "V-220697: Verify Secure Boot manually in firmware"
+}
+
+# V-220699: Windows 10/11 must be configured to audit failures for SYSTEM\Security State Change
+try {
+    $auditResult = auditpol /get /subcategory:"Security State Change" 2>$null
+    if ($auditResult -match "Failure") {
+        Add-Result -Category "STIG - CAT I" -Status "Pass" `
+            -Message "Audit policy: Security State Change - Failure auditing enabled" `
+            -Details "V-220699: Detects security system modifications"
+    } else {
+        Add-Result -Category "STIG - CAT I" -Status "Fail" `
+            -Message "Security State Change failure auditing not enabled" `
+            -Details "V-220699: CAT I - Enable audit policy" `
+            -Remediation "auditpol /set /subcategory:'Security State Change' /failure:enable"
+    }
+} catch {
+    Add-Result -Category "STIG - CAT I" -Status "Error" `
+        -Message "Failed to check Security State Change audit policy: $_"
+}
+
+# V-220726: Administrator account must be disabled
+try {
+    $adminAccount = Get-LocalUser | Where-Object { $_.SID -like "*-500" }
+    if ($adminAccount) {
+        if ($adminAccount.Enabled -eq $false) {
+            Add-Result -Category "STIG - CAT I" -Status "Pass" `
+                -Message "Built-in Administrator account is disabled" `
+                -Details "V-220726: Prevents attacks on well-known account"
         } else {
-            Add-Check -Category "File System" -Status "Failed" -Message "Drive $($vol.DriveLetter): NOT NTFS" `
-                -Current $vol.FileSystemType -Expected "NTFS" -Sev "High" `
-                -Details "NTFS provides security features not available in FAT32" `
-                -Remediation "# Convert using: convert $($vol.DriveLetter): /fs:ntfs" `
-                -VulnID "V-220697"
+            Add-Result -Category "STIG - CAT I" -Status "Fail" `
+                -Message "Built-in Administrator account is enabled" `
+                -Details "V-220726: CAT I - Disable Administrator account" `
+                -Remediation "Disable-LocalUser -SID $($adminAccount.SID)"
         }
     }
-    
-    # V-220706: Command line data in process creation events
-    $cmdLineAudit = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit" -Name "ProcessCreationIncludeCmdLine_Enabled" -ErrorAction SilentlyContinue).ProcessCreationIncludeCmdLine_Enabled
-    if($cmdLineAudit -eq 1){
-        Add-Check -Category "Audit Policy" -Status "Passed" -Message "Command line audit enabled" `
-            -Current "Enabled" -Expected "Enabled" -Sev "Medium" -VulnID "V-220706"
-    } else {
-        Add-Check -Category "Audit Policy" -Status "Failed" -Message "Command line audit NOT enabled" `
-            -Current "Disabled" -Expected "Enabled" -Sev "Medium" `
-            -Details "Important for incident response" `
-            -Remediation "New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' -Name 'ProcessCreationIncludeCmdLine_Enabled' -Value 1" `
-            -VulnID "V-220706"
+} catch {
+    Add-Result -Category "STIG - CAT I" -Status "Error" `
+        -Message "Failed to check Administrator account: $_"
+}
+
+# V-220727: Guest account must be disabled
+try {
+    $guestAccount = Get-LocalUser -Name "Guest" -ErrorAction SilentlyContinue
+    if ($guestAccount) {
+        if ($guestAccount.Enabled -eq $false) {
+            Add-Result -Category "STIG - CAT I" -Status "Pass" `
+                -Message "Guest account is disabled" `
+                -Details "V-220727: Prevents anonymous access"
+        } else {
+            Add-Result -Category "STIG - CAT I" -Status "Fail" `
+                -Message "Guest account is enabled" `
+                -Details "V-220727: CAT I - Disable Guest account" `
+                -Remediation "Disable-LocalUser -Name Guest"
+        }
     }
-    
-    # V-220708: Advanced Audit Policy must be configured
-    $auditCategoryCheck = auditpol /get /category:* | Select-String "Success and Failure"
-    if($auditCategoryCheck.Count -gt 0){
-        Add-Check -Category "Audit Policy" -Status "Passed" -Message "Advanced audit policies configured ($($auditCategoryCheck.Count) enabled)" `
-            -Current "Configured" -Expected "Configured" -Sev "Medium" -VulnID "V-220708"
+} catch {
+    Add-Result -Category "STIG - CAT I" -Status "Error" `
+        -Message "Failed to check Guest account: $_"
+}
+
+# V-220912: Anonymous SID/Name translation must not be allowed
+try {
+    $lsaAnonymous = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "TurnOffAnonymousBlock" -ErrorAction SilentlyContinue
+    if ($lsaAnonymous -and $lsaAnonymous.TurnOffAnonymousBlock -eq 1) {
+        Add-Result -Category "STIG - CAT I" -Status "Fail" `
+            -Message "Anonymous SID/Name translation is allowed" `
+            -Details "V-220912: CAT I - Block anonymous access" `
+            -Remediation "Set registry: TurnOffAnonymousBlock = 0"
     } else {
-        Add-Check -Category "Audit Policy" -Status "Warnings" -Message "Advanced audit policies may not be configured" `
-            -Current "Unknown" -Expected "Configured" -Sev "Medium" -VulnID "V-220708"
+        Add-Result -Category "STIG - CAT I" -Status "Pass" `
+            -Message "Anonymous SID/Name translation is blocked" `
+            -Details "V-220912: Prevents information disclosure"
     }
-    
-    # V-220750: Anonymous SID/Name translation
-    $anonSIDTranslation = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "TurnOffAnonymousBlock" -ErrorAction SilentlyContinue).TurnOffAnonymousBlock
-    if($anonSIDTranslation -eq 1 -or $null -eq $anonSIDTranslation){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "Anonymous SID translation blocked" `
-            -Current "Blocked" -Expected "Blocked" -Sev "Medium" -VulnID "V-220750"
+} catch {
+    Add-Result -Category "STIG - CAT I" -Status "Error" `
+        -Message "Failed to check anonymous access settings: $_"
+}
+
+# ============================================================================
+# STIG CAT II (Category II - Medium Severity)
+# ============================================================================
+Write-Host "[STIG] Checking Category II (Medium Severity) Requirements..." -ForegroundColor Yellow
+
+# V-220698: Systems must have Unified Extensible Firmware Interface (UEFI) firmware
+try {
+    $firmwareType = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\State" -Name "UEFISecureBootEnabled" -ErrorAction SilentlyContinue
+    if ($firmwareType) {
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "System uses UEFI firmware" `
+            -Details "V-220698: UEFI provides enhanced security features"
     } else {
-        Add-Check -Category "Network Security" -Status "Failed" -Message "Anonymous SID translation NOT blocked" `
-            -Current "Allowed" -Expected "Blocked" -Sev "Medium" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'TurnOffAnonymousBlock' -Value 1" `
-            -VulnID "V-220750"
+        Add-Result -Category "STIG - CAT II" -Status "Warning" `
+            -Message "Cannot verify UEFI status (may be Legacy BIOS)" `
+            -Details "V-220698: CAT II - UEFI firmware is required"
     }
-    
-    # V-220756: Network access sharing model
-    $forceGuest = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "ForceGuest" -ErrorAction SilentlyContinue).ForceGuest
-    if($forceGuest -eq 0 -or $null -eq $forceGuest){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "Classic authentication model enforced" `
-            -Current "Classic" -Expected "Classic" -Sev "Medium" -VulnID "V-220756"
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Info" `
+        -Message "Unable to determine firmware type" `
+        -Details "V-220698"
+}
+
+# V-220725: Passwords must be configured to expire
+try {
+    $passwordPolicy = net accounts | Out-String
+    if ($passwordPolicy -match "Maximum password age \(days\):\s+(\d+)") {
+        $maxAge = [int]$Matches[1]
+        if ($maxAge -gt 0 -and $maxAge -le 60) {
+            Add-Result -Category "STIG - CAT II" -Status "Pass" `
+                -Message "Password maximum age is $maxAge days" `
+                -Details "V-220725: Forces regular password changes"
+        } elseif ($maxAge -eq 0) {
+            Add-Result -Category "STIG - CAT II" -Status "Fail" `
+                -Message "Passwords are set to never expire" `
+                -Details "V-220725: CAT II - Set maximum password age to 60 days or less" `
+                -Remediation "net accounts /maxpwage:60"
+        } else {
+            Add-Result -Category "STIG - CAT II" -Status "Warning" `
+                -Message "Password maximum age is $maxAge days (should be 60 or less)" `
+                -Details "V-220725"
+        }
+    }
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check password policy: $_"
+}
+
+# V-220729: Passwords must be a minimum of 14 characters
+try {
+    $passwordPolicy = net accounts | Out-String
+    if ($passwordPolicy -match "Minimum password length\s+(\d+)") {
+        $minLength = [int]$Matches[1]
+        if ($minLength -ge 14) {
+            Add-Result -Category "STIG - CAT II" -Status "Pass" `
+                -Message "Minimum password length is $minLength characters" `
+                -Details "V-220729: Enhances password strength"
+        } else {
+            Add-Result -Category "STIG - CAT II" -Status "Fail" `
+                -Message "Minimum password length is $minLength (must be 14+)" `
+                -Details "V-220729: CAT II - Increase minimum password length" `
+                -Remediation "net accounts /minpwlen:14"
+        }
+    }
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check password length policy: $_"
+}
+
+# V-220728: Account lockout duration must be configured
+try {
+    $passwordPolicy = net accounts | Out-String
+    if ($passwordPolicy -match "Lockout duration \(minutes\):\s+(\d+)") {
+        $duration = [int]$Matches[1]
+        if ($duration -ge 15) {
+            Add-Result -Category "STIG - CAT II" -Status "Pass" `
+                -Message "Account lockout duration is $duration minutes" `
+                -Details "V-220728: Prevents automated password attacks"
+        } else {
+            Add-Result -Category "STIG - CAT II" -Status "Fail" `
+                -Message "Account lockout duration is $duration minutes (must be 15+)" `
+                -Details "V-220728: CAT II - Set lockout duration to 15 minutes minimum" `
+                -Remediation "net accounts /lockoutduration:15"
+        }
+    }
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check lockout duration: $_"
+}
+
+# V-220732: Account lockout threshold must be configured
+try {
+    $passwordPolicy = net accounts | Out-String
+    if ($passwordPolicy -match "Lockout threshold:\s+(\d+)") {
+        $threshold = [int]$Matches[1]
+        if ($threshold -gt 0 -and $threshold -le 3) {
+            Add-Result -Category "STIG - CAT II" -Status "Pass" `
+                -Message "Account lockout threshold is $threshold attempts" `
+                -Details "V-220732: Mitigates brute force attacks"
+        } elseif ($threshold -eq 0) {
+            Add-Result -Category "STIG - CAT II" -Status "Fail" `
+                -Message "Account lockout is disabled" `
+                -Details "V-220732: CAT II - Set lockout threshold to 3 or fewer" `
+                -Remediation "net accounts /lockoutthreshold:3"
+        } else {
+            Add-Result -Category "STIG - CAT II" -Status "Warning" `
+                -Message "Account lockout threshold is $threshold (recommend 3 or less)" `
+                -Details "V-220732"
+        }
+    }
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check lockout threshold: $_"
+}
+
+# V-220730: Password history must be configured
+try {
+    $passwordPolicy = net accounts | Out-String
+    if ($passwordPolicy -match "Length of password history maintained:\s+(\d+)") {
+        $history = [int]$Matches[1]
+        if ($history -ge 24) {
+            Add-Result -Category "STIG - CAT II" -Status "Pass" `
+                -Message "Password history is set to $history passwords" `
+                -Details "V-220730: Prevents password reuse"
+        } else {
+            Add-Result -Category "STIG - CAT II" -Status "Fail" `
+                -Message "Password history is $history (must be 24+)" `
+                -Details "V-220730: CAT II - Set password history to 24" `
+                -Remediation "Configure via Group Policy: Password Policy > Enforce password history = 24"
+        }
+    }
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check password history: $_"
+}
+
+# V-220857: Windows PowerShell 2.0 must not be installed
+try {
+    $psv2 = Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root -ErrorAction SilentlyContinue
+    if ($psv2) {
+        if ($psv2.State -eq "Disabled") {
+            Add-Result -Category "STIG - CAT II" -Status "Pass" `
+                -Message "PowerShell 2.0 is not installed" `
+                -Details "V-220857: Prevents downgrade attacks"
+        } else {
+            Add-Result -Category "STIG - CAT II" -Status "Fail" `
+                -Message "PowerShell 2.0 is installed" `
+                -Details "V-220857: CAT II - Remove PowerShell 2.0" `
+                -Remediation "Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root"
+        }
+    }
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Info" `
+        -Message "Could not check PowerShell 2.0 status" `
+        -Details "V-220857"
+}
+
+# V-220908: SMB v1 must be disabled
+try {
+    $smbv1 = Get-SmbServerConfiguration -ErrorAction SilentlyContinue | Select-Object EnableSMB1Protocol
+    if ($smbv1 -and $smbv1.EnableSMB1Protocol -eq $false) {
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "SMBv1 protocol is disabled" `
+            -Details "V-220908: Prevents exploitation of vulnerable protocol"
+    } elseif ($smbv1 -and $smbv1.EnableSMB1Protocol -eq $true) {
+        Add-Result -Category "STIG - CAT II" -Status "Fail" `
+            -Message "SMBv1 protocol is enabled" `
+            -Details "V-220908: CAT II - Disable SMBv1 immediately" `
+            -Remediation "Set-SmbServerConfiguration -EnableSMB1Protocol `$false -Force"
+    }
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check SMBv1 status: $_"
+}
+
+# V-220856: Windows Defender AV must be enabled
+try {
+    $defenderStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
+    if ($defenderStatus -and $defenderStatus.RealTimeProtectionEnabled) {
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "Windows Defender real-time protection is enabled" `
+            -Details "V-220856: Provides malware protection"
     } else {
-        Add-Check -Category "Network Security" -Status "Failed" -Message "Guest-only authentication active" `
-            -Current "Guest only" -Expected "Classic" -Sev "Medium" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'ForceGuest' -Value 0" `
-            -VulnID "V-220756"
+        Add-Result -Category "STIG - CAT II" -Status "Fail" `
+            -Message "Windows Defender real-time protection is not enabled" `
+            -Details "V-220856: CAT II - Enable Windows Defender" `
+            -Remediation "Set-MpPreference -DisableRealtimeMonitoring `$false"
     }
-    
-    # V-220760: LAN Manager hash storage
-    $noLMHash = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "NoLMHash" -ErrorAction SilentlyContinue).NoLMHash
-    if($noLMHash -eq 1){
-        Add-Check -Category "Credential Protection" -Status "Passed" -Message "LM hash storage disabled" `
-            -Current "Disabled" -Expected "Disabled" -Sev "High" -VulnID "V-220760"
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check Windows Defender: $_"
+}
+
+# V-220909: WDigest Authentication must be disabled
+try {
+    $wdigest = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name "UseLogonCredential" -ErrorAction SilentlyContinue
+    if ($wdigest -and $wdigest.UseLogonCredential -eq 0) {
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "WDigest authentication is disabled" `
+            -Details "V-220909: Prevents credential theft"
+    } elseif ($wdigest -and $wdigest.UseLogonCredential -eq 1) {
+        Add-Result -Category "STIG - CAT II" -Status "Fail" `
+            -Message "WDigest authentication is enabled" `
+            -Details "V-220909: CAT II - Disable WDigest" `
+            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -Value 0"
     } else {
-        Add-Check -Category "Credential Protection" -Status "Failed" -Message "LM hash storage NOT disabled" `
-            -Current "Enabled" -Expected "Disabled" -Sev "High" `
-            -Details "LM hashes are weak and easily cracked" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'NoLMHash' -Value 1" `
-            -VulnID "V-220760"
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "WDigest is disabled by default (Windows 8.1+)" `
+            -Details "V-220909"
     }
-    
-    # V-220761: LAN Manager authentication level
-    $lmAuthLevel = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "LmCompatibilityLevel" -ErrorAction SilentlyContinue).LmCompatibilityLevel
-    if($lmAuthLevel -eq 5){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "LM authentication level set to NTLMv2 only" `
-            -Current "5 (NTLMv2 only)" -Expected "5" -Sev "High" -VulnID "V-220761"
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check WDigest status: $_"
+}
+
+# V-220913: Anonymous access to Named Pipes and Shares must be restricted
+try {
+    $restrictAnon = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanManServer\Parameters" -Name "RestrictNullSessAccess" -ErrorAction SilentlyContinue
+    if ($restrictAnon -and $restrictAnon.RestrictNullSessAccess -eq 1) {
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "Anonymous access to named pipes and shares is restricted" `
+            -Details "V-220913: Prevents information disclosure"
     } else {
-        Add-Check -Category "Network Security" -Status "Failed" -Message "LM authentication level not optimal" `
-            -Current $(if($lmAuthLevel){"$lmAuthLevel"}else{"Not Set"}) -Expected "5" -Sev "High" `
-            -Details "Weak authentication protocols allowed" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'LmCompatibilityLevel' -Value 5" `
-            -VulnID "V-220761"
+        Add-Result -Category "STIG - CAT II" -Status "Fail" `
+            -Message "Anonymous access to named pipes/shares is not restricted" `
+            -Details "V-220913: CAT II - Restrict anonymous access" `
+            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanManServer\Parameters' -Name RestrictNullSessAccess -Value 1"
     }
-    
-    # V-220762: NTLM SSP client security
-    $ntlmMinClientSec = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0" -Name "NTLMMinClientSec" -ErrorAction SilentlyContinue).NTLMMinClientSec
-    if($ntlmMinClientSec -eq 537395200){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "NTLM client security configured" `
-            -Current "537395200 (NTLMv2 + 128-bit)" -Expected "537395200" -Sev "Medium" -VulnID "V-220762"
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check anonymous access restriction: $_"
+}
+
+# V-220925: User Account Control must be configured to run all administrators in Admin Approval Mode
+try {
+    $uacEnabled = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -ErrorAction SilentlyContinue
+    if ($uacEnabled -and $uacEnabled.EnableLUA -eq 1) {
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "UAC Admin Approval Mode is enabled" `
+            -Details "V-220925: Prevents unauthorized elevation"
     } else {
-        Add-Check -Category "Network Security" -Status "Failed" -Message "NTLM client security not configured" `
-            -Current $(if($ntlmMinClientSec){"$ntlmMinClientSec"}else{"Not Set"}) -Expected "537395200" -Sev "Medium" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name 'NTLMMinClientSec' -Value 537395200" `
-            -VulnID "V-220762"
+        Add-Result -Category "STIG - CAT II" -Status "Fail" `
+            -Message "UAC Admin Approval Mode is disabled" `
+            -Details "V-220925: CAT II - Enable UAC" `
+            -Remediation "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1"
     }
-    
-    # V-220763: NTLM SSP server security
-    $ntlmMinServerSec = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0" -Name "NTLMMinServerSec" -ErrorAction SilentlyContinue).NTLMMinServerSec
-    if($ntlmMinServerSec -eq 537395200){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "NTLM server security configured" `
-            -Current "537395200 (NTLMv2 + 128-bit)" -Expected "537395200" -Sev "Medium" -VulnID "V-220763"
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check UAC status: $_"
+}
+
+# V-220926: UAC elevation prompt for administrators must be configured to Prompt for consent on the secure desktop
+try {
+    $uacPrompt = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -ErrorAction SilentlyContinue
+    if ($uacPrompt -and $uacPrompt.ConsentPromptBehaviorAdmin -eq 2) {
+        Add-Result -Category "STIG - CAT II" -Status "Pass" `
+            -Message "UAC configured to prompt on secure desktop" `
+            -Details "V-220926: Protects elevation prompt from manipulation"
     } else {
-        Add-Check -Category "Network Security" -Status "Failed" -Message "NTLM server security not configured" `
-            -Current $(if($ntlmMinServerSec){"$ntlmMinServerSec"}else{"Not Set"}) -Expected "537395200" -Sev "Medium" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0' -Name 'NTLMMinServerSec' -Value 537395200" `
-            -VulnID "V-220763"
+        Add-Result -Category "STIG - CAT II" -Status "Fail" `
+            -Message "UAC not configured for secure desktop prompt" `
+            -Details "V-220926: CAT II - Configure UAC prompt behavior" `
+            -Remediation "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 2"
     }
-    
-    # V-220764: Session security for NTLM SSP clients
-    $clientSessionSec = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0" -Name "NTLMMinClientSec" -ErrorAction SilentlyContinue).NTLMMinClientSec
-    # Already checked above as V-220762
-    
-    # V-220778: Virtualization-based security
-    $vbs = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" -Name "EnableVirtualizationBasedSecurity" -ErrorAction SilentlyContinue).EnableVirtualizationBasedSecurity
-    if($vbs -eq 1){
-        Add-Check -Category "Credential Protection" -Status "Passed" -Message "Virtualization-based security enabled" `
-            -Current "Enabled" -Expected "Enabled" -Sev "High" -VulnID "V-220778"
-    } else {
-        Add-Check -Category "Credential Protection" -Status "Warnings" -Message "VBS not enabled" `
-            -Current "Disabled/Not Configured" -Expected "Enabled" -Sev "High" `
-            -Details "Requires compatible hardware (TPM 2.0, UEFI)" -VulnID "V-220778"
-    }
-    
-    # V-220779: Credential Guard
-    $credGuard = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" -Name "LsaCfgFlags" -ErrorAction SilentlyContinue).LsaCfgFlags
-    if($credGuard -eq 1 -or $credGuard -eq 2){
-        Add-Check -Category "Credential Protection" -Status "Passed" -Message "Credential Guard configured" `
-            -Current $(if($credGuard -eq 1){"Enabled with lock"}else{"Enabled without lock"}) -Expected "Enabled" -Sev "High" -VulnID "V-220779"
-    } else {
-        Add-Check -Category "Credential Protection" -Status "Warnings" -Message "Credential Guard not configured" `
-            -Current "Not Configured" -Expected "Enabled" -Sev "High" `
-            -Details "Requires VBS and compatible hardware" -VulnID "V-220779"
-    }
-    
-    # V-220780: Secure Boot
+} catch {
+    Add-Result -Category "STIG - CAT II" -Status "Error" `
+        -Message "Failed to check UAC prompt behavior: $_"
+}
+
+# ============================================================================
+# STIG Audit Policy Requirements
+# ============================================================================
+Write-Host "[STIG] Checking Audit Policy Requirements..." -ForegroundColor Yellow
+
+$stigAuditRequirements = @(
+    @{Subcategory="Credential Validation"; Required="Success and Failure"; STIG="V-220701"}
+    @{Subcategory="Security Group Management"; Required="Success"; STIG="V-220709"}
+    @{Subcategory="User Account Management"; Required="Success and Failure"; STIG="V-220710"}
+    @{Subcategory="Logoff"; Required="Success"; STIG="V-220714"}
+    @{Subcategory="Logon"; Required="Success and Failure"; STIG="V-220715"}
+    @{Subcategory="Special Logon"; Required="Success"; STIG="V-220716"}
+    @{Subcategory="Process Creation"; Required="Success"; STIG="V-220720"}
+    @{Subcategory="Account Lockout"; Required="Failure"; STIG="V-220700"}
+)
+
+foreach ($requirement in $stigAuditRequirements) {
     try {
-        $secureBootStatus = Confirm-SecureBootUEFI
-        if($secureBootStatus){
-            Add-Check -Category "Boot Security" -Status "Passed" -Message "Secure Boot enabled" `
-                -Current "Enabled" -Expected "Enabled" -Sev "High" -VulnID "V-220780"
-        } else {
-            Add-Check -Category "Boot Security" -Status "Failed" -Message "Secure Boot NOT enabled" `
-                -Current "Disabled" -Expected "Enabled" -Sev "High" `
-                -Remediation "# Enable Secure Boot in UEFI firmware settings" `
-                -VulnID "V-220780"
+        $auditSetting = auditpol /get /subcategory:"$($requirement.Subcategory)" 2>$null
+        if ($auditSetting) {
+            $hasSuccess = $auditSetting -match "Success"
+            $hasFailure = $auditSetting -match "Failure"
+            
+            $meetsRequirement = $false
+            if ($requirement.Required -eq "Success and Failure") {
+                $meetsRequirement = $hasSuccess -and $hasFailure
+            } elseif ($requirement.Required -eq "Success") {
+                $meetsRequirement = $hasSuccess
+            } elseif ($requirement.Required -eq "Failure") {
+                $meetsRequirement = $hasFailure
+            }
+            
+            if ($meetsRequirement) {
+                Add-Result -Category "STIG - Audit Policy" -Status "Pass" `
+                    -Message "$($requirement.Subcategory): Configured correctly" `
+                    -Details "$($requirement.STIG): $($requirement.Required) auditing enabled"
+            } else {
+                Add-Result -Category "STIG - Audit Policy" -Status "Fail" `
+                    -Message "$($requirement.Subcategory): Not configured correctly" `
+                    -Details "$($requirement.STIG): Must enable $($requirement.Required) auditing" `
+                    -Remediation "auditpol /set /subcategory:'$($requirement.Subcategory)' /$($requirement.Required.ToLower().Replace(' and ', ':enable /').Replace(' ', ':enable'))"
+            }
         }
     } catch {
-        Add-Check -Category "Boot Security" -Status "Warnings" -Message "Secure Boot status unavailable" `
-            -Details "System may not support UEFI" -Sev "High" -VulnID "V-220780"
+        Add-Result -Category "STIG - Audit Policy" -Status "Error" `
+            -Message "Failed to check audit policy for $($requirement.Subcategory): $_"
     }
-    
-    # V-220908: Simple TCP/IP Services
-    $simpleTCP = Get-WindowsOptionalFeature -Online -FeatureName "SimpleTCP" -ErrorAction SilentlyContinue
-    if($simpleTCP -and $simpleTCP.State -eq "Disabled"){
-        Add-Check -Category "Services" -Status "Passed" -Message "Simple TCP/IP Services disabled" `
-            -Current "Disabled" -Expected "Disabled" -Sev "Medium" -VulnID "V-220908"
-    } elseif($simpleTCP -and $simpleTCP.State -eq "Enabled"){
-        Add-Check -Category "Services" -Status "Failed" -Message "Simple TCP/IP Services ENABLED" `
-            -Current "Enabled" -Expected "Disabled" -Sev "Medium" `
-            -Remediation "Disable-WindowsOptionalFeature -Online -FeatureName SimpleTCP -NoRestart" `
-            -VulnID "V-220908"
-    }
-    
-    # V-220909: Telnet Client
-    $telnet = Get-WindowsOptionalFeature -Online -FeatureName "TelnetClient" -ErrorAction SilentlyContinue
-    if($telnet -and $telnet.State -eq "Disabled"){
-        Add-Check -Category "Services" -Status "Passed" -Message "Telnet Client disabled" `
-            -Current "Disabled" -Expected "Disabled" -Sev "Medium" -VulnID "V-220909"
-    } elseif($telnet -and $telnet.State -eq "Enabled"){
-        Add-Check -Category "Services" -Status "Failed" -Message "Telnet Client ENABLED" `
-            -Current "Enabled" -Expected "Disabled" -Sev "Medium" `
-            -Details "Telnet transmits credentials in plaintext" `
-            -Remediation "Disable-WindowsOptionalFeature -Online -FeatureName TelnetClient -NoRestart" `
-            -VulnID "V-220909"
-    }
-    
-    # V-220910: TFTP Client
-    $tftp = Get-WindowsOptionalFeature -Online -FeatureName "TFTP" -ErrorAction SilentlyContinue
-    if($tftp -and $tftp.State -eq "Disabled"){
-        Add-Check -Category "Services" -Status "Passed" -Message "TFTP Client disabled" `
-            -Current "Disabled" -Expected "Disabled" -Sev "Medium" -VulnID "V-220910"
-    } elseif($tftp -and $tftp.State -eq "Enabled"){
-        Add-Check -Category "Services" -Status "Failed" -Message "TFTP Client ENABLED" `
-            -Current "Enabled" -Expected "Disabled" -Sev "Medium" `
-            -Remediation "Disable-WindowsOptionalFeature -Online -FeatureName TFTP -NoRestart" `
-            -VulnID "V-220910"
-    }
-    
-    # V-220920: Users must be prompted for a password on resume
-    $powerSettings = powercfg /GETACTIVESCHEME
-    if($powerSettings -match "([a-f0-9\-]+)"){
-        $scheme = $matches[1]
-        $consolePrompt = powercfg /Q $scheme SUB_NONE CONSOLELOCK | Select-String "Current AC Power Setting Index:"
-        if($consolePrompt -match "0x00000001"){
-            Add-Check -Category "Power Management" -Status "Passed" -Message "Password required on AC wake" `
-                -Current "Required" -Expected "Required" -Sev "Low" -VulnID "V-220920"
-        }
-    }
-    
-    # V-220924: Automatic logon must be disabled
-    $autoAdminLogon = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -ErrorAction SilentlyContinue).AutoAdminLogon
-    if($autoAdminLogon -eq "0" -or $null -eq $autoAdminLogon){
-        Add-Check -Category "Authentication" -Status "Passed" -Message "Automatic logon disabled" `
-            -Current "Disabled" -Expected "Disabled" -Sev "High" -VulnID "V-220924"
-    } else {
-        Add-Check -Category "Authentication" -Status "Failed" -Message "Automatic logon ENABLED" `
-            -Current "Enabled" -Expected "Disabled" -Sev "High" `
-            -Details "Automatic logon exposes credentials" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoAdminLogon' -Value '0'" `
-            -VulnID "V-220924"
-    }
-    
-    # V-220925: Passwords must not be saved in Remote Desktop Client
-    $rdpSavePassword = (Get-ItemProperty -Path "HKCU:\Software\Policies\Microsoft\Windows NT\Terminal Services" -Name "DisablePasswordSaving" -ErrorAction SilentlyContinue).DisablePasswordSaving
-    if($rdpSavePassword -eq 1){
-        Add-Check -Category "Remote Desktop" -Status "Passed" -Message "RDP password saving disabled" `
-            -Current "Disabled" -Expected "Disabled" -Sev "Medium" -VulnID "V-220925"
-    } else {
-        Add-Check -Category "Remote Desktop" -Status "Warnings" -Message "RDP password saving not disabled" `
-            -Current "Not Configured" -Expected "Disabled" -Sev "Medium" -VulnID "V-220925"
-    }
-    
-    # V-220926: Local drives must not be shared with Remote Desktop sessions
-    $rdpDriveRedirect = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" -Name "fDisableCdm" -ErrorAction SilentlyContinue).fDisableCdm
-    if($rdpDriveRedirect -eq 1){
-        Add-Check -Category "Remote Desktop" -Status "Passed" -Message "RDP drive redirection disabled" `
-            -Current "Disabled" -Expected "Disabled" -Sev "Medium" -VulnID "V-220926"
-    }
-    
-    # V-220936: Zone information must be preserved
-    $zonePreserve = (Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" -Name "SaveZoneInformation" -ErrorAction SilentlyContinue).SaveZoneInformation
-    if($zonePreserve -eq 2){
-        Add-Check -Category "File Handling" -Status "Passed" -Message "Zone information preserved" `
-            -Current "Enabled" -Expected "Enabled" -Sev "Low" -VulnID "V-220936"
-    }
-    
-    # V-220947: Enhanced phishing protection
-    $enhancedPhishing = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -Name "EnableSmartScreen" -ErrorAction SilentlyContinue).EnableSmartScreen
-    if($enhancedPhishing -eq 1){
-        Add-Check -Category "Security Features" -Status "Passed" -Message "SmartScreen enabled" `
-            -Current "Enabled" -Expected "Enabled" -Sev "Medium" -VulnID "V-220947"
-    }
-    
-    # Additional STIG checks
-    
-    # Check for null sessions
-    $restrictAnonymous = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymous" -ErrorAction SilentlyContinue).RestrictAnonymous
-    if($restrictAnonymous -eq 1){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "Anonymous enumeration restricted" `
-            -Current "Restricted" -Expected "Restricted" -Sev "Medium" -VulnID "STIG-Network"
-    } else {
-        Add-Check -Category "Network Security" -Status "Failed" -Message "Anonymous enumeration NOT restricted" `
-            -Current "Allowed" -Expected "Restricted" -Sev "Medium" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymous' -Value 1" `
-            -VulnID "STIG-Network"
-    }
-    
-    # Audit: Shut down system immediately if unable to log security audits
-    $auditFull = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "CrashOnAuditFail" -ErrorAction SilentlyContinue).CrashOnAuditFail
-    if($auditFull -eq 1){
-        Add-Check -Category "Audit Policy" -Status "Info" -Message "System crashes on audit failure (very high security)" `
-            -Current "Enabled" -Expected "Based on requirements" -Sev "Low" -VulnID "STIG-Audit"
-    }
-    
-    # Check registry permissions on sensitive keys
-    $samKey = Get-Acl "HKLM:\SAM" -ErrorAction SilentlyContinue
-    if($samKey){
-        Add-Check -Category "Registry Security" -Status "Info" -Message "SAM registry key ACL present" `
-            -Details "Verify only SYSTEM has full control" -Sev "High" -VulnID "STIG-Registry"
-    }
-    
-    # Check LDAP client signing
-    $ldapClientIntegrity = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LDAP" -Name "LDAPClientIntegrity" -ErrorAction SilentlyContinue).LDAPClientIntegrity
-    if($ldapClientIntegrity -eq 1){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "LDAP client signing required" `
-            -Current "Negotiate signing" -Expected "Negotiate/Required" -Sev "Medium" -VulnID "STIG-LDAP"
-    }
-    
-    # Check outbound anonymous connections
-    $restrictAnonymousEnum = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RestrictAnonymousSAM" -ErrorAction SilentlyContinue).RestrictAnonymousSAM
-    if($restrictAnonymousEnum -eq 1){
-        Add-Check -Category "Network Security" -Status "Passed" -Message "Anonymous SAM enumeration restricted" `
-            -Current "Restricted" -Expected "Restricted" -Sev "Medium" -VulnID "STIG-SAM"
-    } else {
-        Add-Check -Category "Network Security" -Status "Failed" -Message "Anonymous SAM enumeration NOT restricted" `
-            -Current "Allowed" -Expected "Restricted" -Sev "Medium" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'RestrictAnonymousSAM' -Value 1" `
-            -VulnID "STIG-SAM"
-    }
-    
-    Write-Host "STIG checks complete: $($results.Passed.Count) passed, $($results.Failed.Count) failed" -ForegroundColor Green
-    return $results
 }
+
+# ============================================================================
+# STIG Windows Firewall Requirements
+# ============================================================================
+Write-Host "[STIG] Checking Windows Firewall..." -ForegroundColor Yellow
+
+$profiles = @("Domain", "Private", "Public")
+foreach ($profile in $profiles) {
+    try {
+        $fwProfile = Get-NetFirewallProfile -Name $profile
+        
+        # V-220935: Firewall must be enabled
+        if ($fwProfile.Enabled) {
+            Add-Result -Category "STIG - Firewall" -Status "Pass" `
+                -Message "$profile firewall is enabled" `
+                -Details "V-220935/936/937: Firewall provides host-based protection"
+        } else {
+            Add-Result -Category "STIG - Firewall" -Status "Fail" `
+                -Message "$profile firewall is disabled" `
+                -Details "V-220935/936/937: CAT II - Enable firewall" `
+                -Remediation "Set-NetFirewallProfile -Name $profile -Enabled True"
+        }
+        
+        # V-220938/939/940: Default inbound action must be Block
+        if ($fwProfile.DefaultInboundAction -eq "Block") {
+            Add-Result -Category "STIG - Firewall" -Status "Pass" `
+                -Message "$profile firewall: Default inbound is Block" `
+                -Details "V-220938/939/940: Implements default deny"
+        } else {
+            Add-Result -Category "STIG - Firewall" -Status "Fail" `
+                -Message "$profile firewall: Default inbound is not Block" `
+                -Details "V-220938/939/940: CAT II - Set default inbound to Block" `
+                -Remediation "Set-NetFirewallProfile -Name $profile -DefaultInboundAction Block"
+        }
+    } catch {
+        Add-Result -Category "STIG - Firewall" -Status "Error" `
+            -Message "Failed to check $profile firewall: $_"
+    }
+}
+
+# ============================================================================
+# Summary Statistics
+# ============================================================================
+$passCount = ($results | Where-Object { $_.Status -eq "Pass" }).Count
+$failCount = ($results | Where-Object { $_.Status -eq "Fail" }).Count
+$warningCount = ($results | Where-Object { $_.Status -eq "Warning" }).Count
+$infoCount = ($results | Where-Object { $_.Status -eq "Info" }).Count
+$errorCount = ($results | Where-Object { $_.Status -eq "Error" }).Count
+$totalChecks = $results.Count
+
+Write-Host "`n[STIG] Module completed:" -ForegroundColor Cyan
+Write-Host "  Total Checks: $totalChecks" -ForegroundColor White
+Write-Host "  Passed: $passCount" -ForegroundColor Green
+Write-Host "  Failed: $failCount" -ForegroundColor Red
+Write-Host "  Warnings: $warningCount" -ForegroundColor Yellow
+Write-Host "  Info: $infoCount" -ForegroundColor Cyan
+Write-Host "  Errors: $errorCount" -ForegroundColor Magenta
+
+Write-Host "`nSTIG Categories:" -ForegroundColor Cyan
+Write-Host "  CAT I (High): Must be remediated immediately" -ForegroundColor Red
+Write-Host "  CAT II (Medium): Should be remediated as soon as possible" -ForegroundColor Yellow
+Write-Host "  CAT III (Low): Should be remediated when feasible" -ForegroundColor White
+
+return $results
