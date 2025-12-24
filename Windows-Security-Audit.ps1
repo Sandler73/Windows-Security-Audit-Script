@@ -1,371 +1,773 @@
+# Windows-Security-Audit-Script.ps1
+# Comprehensive Windows Security Audit Script
+# Version: 5.0
+# GitHub: https://github.com/Sandler73/Windows-Security-Audit-Script
+
 <#
 .SYNOPSIS
-    Windows Security Audit & Remediation Tool - Main Orchestrator v2.0
-    
+    Comprehensive Windows security audit script supporting multiple compliance frameworks.
+
 .DESCRIPTION
-    Modular security audit system for Windows 10/11. Orchestrates framework-specific
-    check modules and aggregates results. Supports CIS, NIST, STIG, and MS Baseline.
-    
-.PARAMETER Framework
-    Security framework(s): ALL, CIS, NIST, STIG, MS, or comma-separated
-    
-.PARAMETER Remediate
-    Enable interactive remediation mode
-    
-.PARAMETER AutoSave
-    Automatically save report with timestamp
-    
-.PARAMETER Format
-    Report format: Text, HTML, CSV, or JSON
-    
-.PARAMETER Severity
-    Filter by severity: ALL, Critical, High, Medium, Low
-    
-.PARAMETER ModulePath
-    Path to framework modules (default: script directory)
+    This script audits Windows systems against multiple security frameworks including:
+    - Core Security (baseline checks)
+    - CIS Benchmarks
+    - Microsoft Security Baseline
+    - NIST Cybersecurity Framework
+    - DISA STIGs
+    - NSA Cybersecurity Guidance
+    - CISA Best Practices
+
+.PARAMETER Modules
+    Comma-separated list of modules to run. Available: Core,CIS,MS,NIST,STIG,NSA,CISA,All
+    Default: All
+
+.PARAMETER OutputFormat
+    Output format: HTML, CSV, JSON, or Console
+    Default: HTML
+
+.PARAMETER OutputPath
+    Path for output file (for HTML, CSV, JSON formats)
+    Default: .\Security-Audit-Report-[timestamp].[ext]
+
+.PARAMETER RemediateIssues
+    Attempt to automatically remediate failed checks where possible
+
+.PARAMETER Verbose
+    Enable verbose output during execution
 
 .EXAMPLE
-    .\Windows-Security-Audit.ps1 -Framework CIS -AutoSave -Format HTML
-    
+    .\Windows-Security-Audit-Script.ps1
+    Run all modules with HTML output
+
 .EXAMPLE
-    .\Windows-Security-Audit.ps1 -Framework CIS,NIST -Remediate -Severity Critical
+    .\Windows-Security-Audit-Script.ps1 -Modules Core,NIST,CISA -OutputFormat CSV
+    Run specific modules and output to CSV
+
+.EXAMPLE
+    .\Windows-Security-Audit-Script.ps1 -RemediateIssues
+    Run audit and attempt to fix issues
 
 .NOTES
-    Version: 2.0 - Modular Architecture
-    Requires: PowerShell 5.1+, Administrator
+    Requires: Windows 10/11 or Windows Server 2016+, PowerShell 5.1+
+    Run as Administrator for complete results
 #>
 
-[CmdletBinding()]
 param(
-    [ValidateSet('ALL','CIS','NIST','STIG','MS','Core')]
-    [string[]]$Framework = @('ALL'),
-    [switch]$Remediate,
-    [switch]$AutoSave,
-    [ValidateSet('Text','HTML','CSV','JSON')]
-    [string]$Format = 'Text',
-    [ValidateSet('ALL','Critical','High','Medium','Low')]
-    [string]$Severity = 'ALL',
-    [string]$ModulePath = $PSScriptRoot
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("Core","CIS","MS","NIST","STIG","NSA","CISA","All")]
+    [string[]]$Modules = @("All"),
+    
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("HTML","CSV","JSON","Console")]
+    [string]$OutputFormat = "HTML",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$OutputPath = "",
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$RemediateIssues
+    
+#    [Parameter(Mandatory=$false)]
+#    [switch]$Verbose
 )
 
-#Requires -RunAsAdministrator
+# ============================================================================
+# Script Configuration
+# ============================================================================
+$ErrorActionPreference = "Continue"
+$script:ScriptVersion = "5.0"
+$script:ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Initialize
-$script:Version = "2.0"
-$script:Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$script:Hostname = $env:COMPUTERNAME
-$script:OSInfo = Get-CimInstance Win32_OperatingSystem
-$script:OSBuild = $script:OSInfo.BuildNumber
-$script:IsWindows11 = $script:OSBuild -ge 22000
-$script:OSName = if($script:IsWindows11){"Windows 11"}else{"Windows 10"}
-
-$script:AggregatedResults = @{Passed=@(); Failed=@(); Warnings=@(); Info=@()}
-$script:RemediationActions = @()
-$script:ModulesExecuted = @()
-$script:TotalChecks = 0
-
-# Output functions
-function Write-Pass{param($M) Write-Host "[PASS] $M" -ForegroundColor Green}
-function Write-Fail{param($M) Write-Host "[FAIL] $M" -ForegroundColor Red}
-function Write-Warn{param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow}
-function Write-Info{param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan}
-function Write-Section{param($M) Write-Host "`n--- $M ---" -ForegroundColor Magenta; Write-Host ""}
-
+# ============================================================================
+# Banner
+# ============================================================================
 function Show-Banner {
-    $fwList = if($Framework -contains 'ALL'){"All Frameworks"}else{$Framework -join ", "}
-    Write-Host @"
-
-===========================================================================
-       Windows Security Audit & Remediation Tool v$script:Version
-                   Modular Architecture Edition
-===========================================================================
-
-Hostname:           $script:Hostname
-Timestamp:          $script:Timestamp
-OS:                 $script:OSName (Build $script:OSBuild)
-PowerShell:         $($PSVersionTable.PSVersion)
-Framework(s):       $fwList
-Severity Filter:    $Severity
-Module Path:        $ModulePath
-
-"@ -ForegroundColor Cyan
+    Write-Host "`n========================================================================================================" -ForegroundColor Cyan
+    Write-Host "                        Windows Security Audit Script v$script:ScriptVersion" -ForegroundColor Cyan
+    Write-Host "                   Comprehensive Multi-Framework Security Assessment" -ForegroundColor Cyan
+    Write-Host "========================================================================================================" -ForegroundColor Cyan
+    Write-Host "`nSupported Frameworks:" -ForegroundColor White
+    Write-Host "  • Core Security Baseline" -ForegroundColor Gray
+    Write-Host "  • CIS Benchmarks" -ForegroundColor Gray
+    Write-Host "  • Microsoft Security Baseline" -ForegroundColor Gray
+    Write-Host "  • NIST Cybersecurity Framework" -ForegroundColor Gray
+    Write-Host "  • DISA STIGs (Security Technical Implementation Guides)" -ForegroundColor Gray
+    Write-Host "  • NSA Cybersecurity Guidance" -ForegroundColor Gray
+    Write-Host "  • CISA Best Practices" -ForegroundColor Gray
+    Write-Host "`n========================================================================================================`n" -ForegroundColor Cyan
 }
 
-function Get-AvailableModules {
-    $modules = @()
-    $moduleFiles = Get-ChildItem -Path $ModulePath -Filter "Module-*.ps1" -ErrorAction SilentlyContinue
+# ============================================================================
+# Prerequisites Check
+# ============================================================================
+function Test-Prerequisites {
+    Write-Host "[*] Checking prerequisites..." -ForegroundColor Yellow
     
-    foreach($file in $moduleFiles){
-        if($file.Name -match 'Module-(\w+)\.ps1'){
-            $modules += @{Name=$matches[1]; Path=$file.FullName; File=$file.Name}
-        }
+    # Check PowerShell version
+    $psVersion = $PSVersionTable.PSVersion
+    if ($psVersion.Major -lt 5) {
+        Write-Host "[!] PowerShell 5.1 or higher is required. Current version: $psVersion" -ForegroundColor Red
+        return $false
     }
-    return $modules
+    Write-Host "[+] PowerShell version: $psVersion" -ForegroundColor Green
+    
+    # Check if running as Administrator
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Host "[!] WARNING: Script is not running as Administrator. Some checks may fail." -ForegroundColor Yellow
+        if ($RemediateIssues) {
+            Write-Host "[!] ERROR: Remediation requires Administrator privileges. Exiting." -ForegroundColor Red
+            return $false
+        }
+        Write-Host "[!] For complete results, run as Administrator." -ForegroundColor Yellow
+    } else {
+        Write-Host "[+] Running with Administrator privileges" -ForegroundColor Green
+    }
+    
+    # Check OS version
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    Write-Host "[+] Operating System: $($os.Caption) (Build $($os.BuildNumber))" -ForegroundColor Green
+    
+    return $true
+}
+
+# ============================================================================
+# Module Management
+# ============================================================================
+function Get-AvailableModules {
+    return @{
+        "Core" = "Module-Core.ps1"
+        "CIS" = "Module-CIS.ps1"
+        "MS" = "Module-MS.ps1"
+        "NIST" = "Module-NIST.ps1"
+        "STIG" = "Module-STIG.ps1"
+        "NSA" = "Module-NSA.ps1"
+        "CISA" = "Module-CISA.ps1"
+    }
+}
+
+function Test-ModuleExists {
+    param([string]$ModuleName)
+    
+    $availableModules = Get-AvailableModules
+    if (-not $availableModules.ContainsKey($ModuleName)) {
+        return $false
+    }
+    
+    $modulePath = Join-Path $script:ScriptPath $availableModules[$ModuleName]
+    return (Test-Path $modulePath)
 }
 
 function Invoke-SecurityModule {
-    param([string]$ModuleName, [string]$ModulePath, [string]$SeverityFilter='ALL')
+    param(
+        [string]$ModuleName,
+        [hashtable]$SharedData
+    )
     
-    Write-Section "Loading Module: $ModuleName"
+    $availableModules = Get-AvailableModules
+    $modulePath = Join-Path $script:ScriptPath $availableModules[$ModuleName]
+    
+    if (-not (Test-Path $modulePath)) {
+        Write-Host "[!] Module not found: $ModuleName at $modulePath" -ForegroundColor Red
+        Write-Host "[!] Expected location: $modulePath" -ForegroundColor Yellow
+        return $null
+    }
     
     try {
-        . $ModulePath
+        Write-Host "`n[*] Executing module: $ModuleName" -ForegroundColor Cyan
         
-        if(Get-Command "Invoke-${ModuleName}Checks" -ErrorAction SilentlyContinue){
-            Write-Info "Executing $ModuleName security checks..."
-            $moduleResults = & "Invoke-${ModuleName}Checks" -Severity $SeverityFilter
-            
-            if($moduleResults){
-                $script:AggregatedResults.Passed += $moduleResults.Passed
-                $script:AggregatedResults.Failed += $moduleResults.Failed
-                $script:AggregatedResults.Warnings += $moduleResults.Warnings
-                $script:AggregatedResults.Info += $moduleResults.Info
-                
-                foreach($item in $moduleResults.Failed){
-                    if($item.Remediation){$script:RemediationActions += $item}
-                }
-                
-                $script:TotalChecks += ($moduleResults.Passed.Count + $moduleResults.Failed.Count + 
-                                       $moduleResults.Warnings.Count + $moduleResults.Info.Count)
-                $script:ModulesExecuted += $ModuleName
-                
-                Write-Info "Module complete: $($moduleResults.Passed.Count) passed, $($moduleResults.Failed.Count) failed, $($moduleResults.Warnings.Count) warnings"
-            }
-        } else {
-            Write-Warn "Module $ModuleName missing Invoke-${ModuleName}Checks function"
-        }
-    } catch {
-        Write-Fail "Error executing module ${ModuleName}: $($_.Exception.Message)"
+        # Create a script block that properly passes the SharedData
+        $scriptBlock = [ScriptBlock]::Create(@"
+            param([hashtable]`$SharedData)
+            & '$modulePath' -SharedData `$SharedData
+"@)
+        
+        $results = Invoke-Command -ScriptBlock $scriptBlock -ArgumentList $SharedData
+        
+        Write-Host "[+] Module $ModuleName completed successfully" -ForegroundColor Green
+        return $results
+    }
+    catch {
+        Write-Host "[!] Error executing module ${ModuleName}: $_" -ForegroundColor Red
+        Write-Host "[!] Error details: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
     }
 }
 
-function Start-Remediation {
-    Write-Host "`n===========================================================================" -ForegroundColor Cyan
-    Write-Host "                 Interactive Remediation Mode" -ForegroundColor Cyan
-    Write-Host "===========================================================================`n" -ForegroundColor Cyan
+# ============================================================================
+# Remediation Functions
+# ============================================================================
+function Invoke-Remediation {
+    param([array]$Results)
     
-    if($script:RemediationActions.Count -eq 0){
-        Write-Host "No automated remediations available." -ForegroundColor Green
+    if (-not $RemediateIssues) {
         return
     }
     
-    Write-Host "Found $($script:RemediationActions.Count) issues with automated fixes.`n" -ForegroundColor Yellow
+    Write-Host "`n========================================================================================================" -ForegroundColor Yellow
+    Write-Host "                                  REMEDIATION MODE" -ForegroundColor Yellow
+    Write-Host "========================================================================================================`n" -ForegroundColor Yellow
     
-    $grouped = $script:RemediationActions | Group-Object Severity | Sort-Object {
-        switch($_.Name){"Critical"{0}"High"{1}"Medium"{2}"Low"{3}default{4}}
+    $failedResults = $Results | Where-Object { $_.Status -eq "Fail" -and $_.Remediation }
+    
+    if ($failedResults.Count -eq 0) {
+        Write-Host "[*] No failed checks with available remediation found." -ForegroundColor Cyan
+        return
     }
     
-    foreach($group in $grouped){
-        $color = switch($group.Name){"Critical"{"Red"}"High"{"DarkRed"}"Medium"{"Yellow"}"Low"{"DarkYellow"}default{"Gray"}}
-        Write-Host "`n=== $($group.Name) Severity ($($group.Count) items) ===" -ForegroundColor $color
+    Write-Host "[*] Found $($failedResults.Count) failed check(s) with remediation available." -ForegroundColor Yellow
+    Write-Host "[*] Attempting automatic remediation..." -ForegroundColor Yellow
+    
+    $remediatedCount = 0
+    $failedRemediationCount = 0
+    
+    foreach ($result in $failedResults) {
+        Write-Host "`n[*] Attempting to remediate: $($result.Message)" -ForegroundColor Cyan
+        Write-Host "    Category: $($result.Category)" -ForegroundColor Gray
+        Write-Host "    Remediation: $($result.Remediation)" -ForegroundColor Gray
         
-        $itemNum = 1
-        foreach($item in $group.Group){
-            Write-Host "`n[$itemNum/$($group.Count)] $($item.Category): $($item.Message)" -ForegroundColor Yellow
-            if($item.Details){Write-Host "    Details: $($item.Details)" -ForegroundColor Gray}
-            if($item.CurrentValue -ne "N/A"){
-                Write-Host "    Current: $($item.CurrentValue) | Expected: $($item.ExpectedValue)" -ForegroundColor Gray
-            }
-            
-            if($item.Remediation -match '^#'){
-                Write-Host "    Manual: $($item.Remediation)`n" -ForegroundColor DarkGray
-                $itemNum++
-                continue
-            }
-            
-            Write-Host "    Fix: $($item.Remediation)" -ForegroundColor White
-            
-            do {$response = (Read-Host "    Apply? (y/n/q)").ToLower()}
-            while($response -notin @('y','n','q'))
-            
-            if($response -eq 'q'){Write-Host "`nCancelled." -ForegroundColor Yellow; return}
-            
-            if($response -eq 'y'){
-                try {
-                    Write-Host "    Applying..." -ForegroundColor Cyan
-                    Invoke-Expression $item.Remediation
-                    Write-Host "    [OK] Success`n" -ForegroundColor Green
-                } catch {
-                    Write-Host "    [ERROR] $($_.Exception.Message)`n" -ForegroundColor Red
-                }
-            } else {Write-Host "    Skipped`n" -ForegroundColor DarkGray}
-            
-            $itemNum++
+        # Confirm with user
+        $response = Read-Host "    Apply this remediation? (Y/N)"
+        if ($response -ne 'Y' -and $response -ne 'y') {
+            Write-Host "    [*] Skipped by user" -ForegroundColor Yellow
+            continue
+        }
+        
+        try {
+            # Execute remediation command
+            $remediationScript = [ScriptBlock]::Create($result.Remediation)
+            Invoke-Command -ScriptBlock $remediationScript
+            Write-Host "    [+] Remediation applied successfully" -ForegroundColor Green
+            $remediatedCount++
+        }
+        catch {
+            Write-Host "    [!] Remediation failed: $_" -ForegroundColor Red
+            $failedRemediationCount++
         }
     }
     
-    Write-Host "`nRemediation complete." -ForegroundColor Green
+    Write-Host "`n========================================================================================================" -ForegroundColor Yellow
+    Write-Host "Remediation Summary:" -ForegroundColor Yellow
+    Write-Host "  Total remediable issues: $($failedResults.Count)" -ForegroundColor White
+    Write-Host "  Successfully remediated: $remediatedCount" -ForegroundColor Green
+    Write-Host "  Failed remediations: $failedRemediationCount" -ForegroundColor Red
+    Write-Host "  Skipped by user: $($failedResults.Count - $remediatedCount - $failedRemediationCount)" -ForegroundColor Yellow
+    Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+    
+    if ($remediatedCount -gt 0) {
+        Write-Host "[*] Some settings may require a system restart to take effect." -ForegroundColor Yellow
+        $restart = Read-Host "Would you like to restart now? (Y/N)"
+        if ($restart -eq 'Y' -or $restart -eq 'y') {
+            Write-Host "[*] Restarting system in 10 seconds..." -ForegroundColor Yellow
+            shutdown /r /t 10 /c "System restart after security remediation"
+        }
+    }
 }
 
-function Export-Report {
-    param([string]$OutputFormat, [string]$OutputPath)
+# ============================================================================
+# Output Generation
+# ============================================================================
+function ConvertTo-HTMLReport {
+    param([array]$AllResults, [hashtable]$ExecutionInfo)
     
-    switch($OutputFormat){
-        'HTML' {
-            $html = @"
+    $html = @"
 <!DOCTYPE html>
-<html><head><title>Security Audit Report</title>
-<style>
-body{font-family:'Segoe UI',Arial;margin:20px;background:#f5f5f5}
-.container{max-width:1400px;margin:0 auto;background:white;padding:30px;box-shadow:0 0 10px rgba(0,0,0,0.1)}
-h1{color:#2c3e50;border-bottom:3px solid #3498db;padding-bottom:10px}
-h2{color:#34495e;margin-top:30px;border-bottom:1px solid #ddd}
-.summary{background:#ecf0f1;padding:20px;border-radius:5px;margin:20px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px}
-.summary-item{text-align:center;padding:15px;background:white;border-radius:5px}
-.summary-item .value{font-size:2em;font-weight:bold}
-.passed .value{color:#27ae60}
-.failed .value{color:#e74c3c}
-.warnings .value{color:#f39c12}
-table{border-collapse:collapse;width:100%;margin:15px 0}
-th,td{border:1px solid #ddd;padding:12px;text-align:left}
-th{background:#3498db;color:white}
-tr:nth-child(even){background:#f9f9f9}
-.critical{background:#ffebee}
-.high{background:#fff3e0}
-code{background:#f4f4f4;padding:2px 5px;border-radius:3px;font-family:Consolas}
-</style></head><body><div class="container">
-<h1>Windows Security Audit Report</h1>
-<p><strong>Host:</strong> $script:Hostname | <strong>OS:</strong> $script:OSName | <strong>Date:</strong> $script:Timestamp</p>
-<p><strong>Frameworks:</strong> $($Framework -join ', ') | <strong>Modules:</strong> $($script:ModulesExecuted -join ', ')</p>
-<div class="summary">
-<div class="summary-item passed"><div class="value">$($script:AggregatedResults.Passed.Count)</div><div class="label">Passed</div></div>
-<div class="summary-item failed"><div class="value">$($script:AggregatedResults.Failed.Count)</div><div class="label">Failed</div></div>
-<div class="summary-item warnings"><div class="value">$($script:AggregatedResults.Warnings.Count)</div><div class="label">Warnings</div></div>
-</div>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Windows Security Audit Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        .header .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        .info-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 3px solid #667eea;
+        }
+        .info-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .info-card h3 {
+            color: #667eea;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        .info-card p {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #333;
+        }
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            padding: 30px;
+            background: white;
+        }
+        .summary-card {
+            text-align: center;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .summary-card.total { background: #e3f2fd; border-left: 4px solid #2196F3; }
+        .summary-card.pass { background: #e8f5e9; border-left: 4px solid #4CAF50; }
+        .summary-card.fail { background: #ffebee; border-left: 4px solid #f44336; }
+        .summary-card.warning { background: #fff3e0; border-left: 4px solid #ff9800; }
+        .summary-card.info { background: #e1f5fe; border-left: 4px solid #00bcd4; }
+        .summary-card.error { background: #f3e5f5; border-left: 4px solid #9c27b0; }
+        .summary-card h3 {
+            font-size: 2.5em;
+            margin-bottom: 5px;
+        }
+        .summary-card p {
+            font-size: 0.9em;
+            text-transform: uppercase;
+            font-weight: 600;
+            opacity: 0.7;
+        }
+        .results {
+            padding: 30px;
+        }
+        .module-section {
+            margin-bottom: 40px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .module-header {
+            background: #667eea;
+            color: white;
+            padding: 20px;
+            font-size: 1.5em;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .module-header:hover {
+            background: #5568d3;
+        }
+        .module-stats {
+            font-size: 0.8em;
+            opacity: 0.9;
+        }
+        .module-content {
+            padding: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        th {
+            background: #667eea;
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.9em;
+        }
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        tr:hover {
+            background: #f5f5f5;
+        }
+        .status {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.85em;
+            text-transform: uppercase;
+            display: inline-block;
+        }
+        .status-pass { background: #4CAF50; color: white; }
+        .status-fail { background: #f44336; color: white; }
+        .status-warning { background: #ff9800; color: white; }
+        .status-info { background: #00bcd4; color: white; }
+        .status-error { background: #9c27b0; color: white; }
+        .details {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        .remediation {
+            background: #fff3cd;
+            padding: 10px;
+            border-left: 4px solid #ff9800;
+            margin-top: 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: 'Courier New', monospace;
+        }
+        .footer {
+            background: #333;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='header'>
+            <h1>🛡️ Windows Security Audit Report</h1>
+            <div class='subtitle'>Comprehensive Multi-Framework Security Assessment</div>
+        </div>
+        
+        <div class='info-section'>
+            <div class='info-card'>
+                <h3>Computer Name</h3>
+                <p>$($ExecutionInfo.ComputerName)</p>
+            </div>
+            <div class='info-card'>
+                <h3>Operating System</h3>
+                <p>$($ExecutionInfo.OSVersion)</p>
+            </div>
+            <div class='info-card'>
+                <h3>Scan Date</h3>
+                <p>$($ExecutionInfo.ScanDate)</p>
+            </div>
+            <div class='info-card'>
+                <h3>Duration</h3>
+                <p>$($ExecutionInfo.Duration)</p>
+            </div>
+            <div class='info-card'>
+                <h3>Modules Executed</h3>
+                <p>$($ExecutionInfo.ModulesRun -join ', ')</p>
+            </div>
+        </div>
+        
+        <div class='summary'>
+            <div class='summary-card total'>
+                <h3>$($ExecutionInfo.TotalChecks)</h3>
+                <p>Total Checks</p>
+            </div>
+            <div class='summary-card pass'>
+                <h3>$($ExecutionInfo.PassCount)</h3>
+                <p>Passed</p>
+            </div>
+            <div class='summary-card fail'>
+                <h3>$($ExecutionInfo.FailCount)</h3>
+                <p>Failed</p>
+            </div>
+            <div class='summary-card warning'>
+                <h3>$($ExecutionInfo.WarningCount)</h3>
+                <p>Warnings</p>
+            </div>
+            <div class='summary-card info'>
+                <h3>$($ExecutionInfo.InfoCount)</h3>
+                <p>Info</p>
+            </div>
+            <div class='summary-card error'>
+                <h3>$($ExecutionInfo.ErrorCount)</h3>
+                <p>Errors</p>
+            </div>
+        </div>
+        
+        <div class='results'>
 "@
-            
-            if($script:AggregatedResults.Failed.Count -gt 0){
-                $html += "<h2>Failed Checks ($($script:AggregatedResults.Failed.Count))</h2><table><tr><th>Category</th><th>Severity</th><th>Message</th><th>Current</th><th>Expected</th><th>Remediation</th></tr>"
-                foreach($item in $script:AggregatedResults.Failed | Sort-Object {switch($_.Severity){"Critical"{0}"High"{1}"Medium"{2}default{3}}}){
-                    $rem = if($item.Remediation){"<code>$($item.Remediation)</code>"}else{"Manual"}
-                    $rowClass = if($item.Severity -eq "Critical"){"critical"}elseif($item.Severity -eq "High"){"high"}else{""}
-                    $html += "<tr class='$rowClass'><td>$($item.Category)</td><td>$($item.Severity)</td><td>$($item.Message)</td><td>$($item.CurrentValue)</td><td>$($item.ExpectedValue)</td><td style='font-size:0.9em'>$rem</td></tr>"
-                }
-                $html += "</table>"
-            }
-            
-            if($script:AggregatedResults.Warnings.Count -gt 0){
-                $html += "<h2>Warnings ($($script:AggregatedResults.Warnings.Count))</h2><table><tr><th>Category</th><th>Severity</th><th>Message</th><th>Current</th><th>Expected</th><th>Details</th></tr>"
-                foreach($item in $script:AggregatedResults.Warnings | Sort-Object {switch($_.Severity){"Critical"{0}"High"{1}"Medium"{2}default{3}}}){
-                    $html += "<tr><td>$($item.Category)</td><td>$($item.Severity)</td><td>$($item.Message)</td><td>$($item.CurrentValue)</td><td>$($item.ExpectedValue)</td><td style='font-size:0.9em'>$($item.Details)</td></tr>"
-                }
-                $html += "</table>"
-            }
-            
-            if($script:AggregatedResults.Passed.Count -gt 0){
-                $html += "<h2>Passed Checks ($($script:AggregatedResults.Passed.Count))</h2><table><tr><th>Category</th><th>Message</th><th>Current Value</th><th>Frameworks</th></tr>"
-                foreach($item in $script:AggregatedResults.Passed | Sort-Object Category){
-                    $html += "<tr><td>$($item.Category)</td><td>$($item.Message)</td><td>$($item.CurrentValue)</td><td style='font-size:0.85em'>$($item.Frameworks)</td></tr>"
-                }
-                $html += "</table>"
-            }
-            
-            $html += "</div></body></html>"
-            $html | Out-File -FilePath $OutputPath -Encoding UTF8
-        }
+
+    # Group results by module
+    $moduleGroups = $AllResults | Group-Object -Property Module
+    
+    foreach ($moduleGroup in $moduleGroups) {
+        $moduleName = $moduleGroup.Name
+        $moduleResults = $moduleGroup.Group
         
-        'JSON' {
-            @{
-                Metadata=@{Hostname=$script:Hostname;OS=$script:OSName;Timestamp=$script:Timestamp;Frameworks=$Framework}
-                Summary=@{Passed=$script:AggregatedResults.Passed.Count;Failed=$script:AggregatedResults.Failed.Count;Warnings=$script:AggregatedResults.Warnings.Count}
-                Results=$script:AggregatedResults
-            } | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutputPath -Encoding UTF8
-        }
+        $modulePass = ($moduleResults | Where-Object { $_.Status -eq "Pass" }).Count
+        $moduleFail = ($moduleResults | Where-Object { $_.Status -eq "Fail" }).Count
+        $moduleWarn = ($moduleResults | Where-Object { $_.Status -eq "Warning" }).Count
         
-        'CSV' {
-            $all = @()
-            $all += $script:AggregatedResults.Passed | Select-Object Status,Category,Message,CurrentValue,ExpectedValue,Severity
-            $all += $script:AggregatedResults.Failed | Select-Object Status,Category,Message,CurrentValue,ExpectedValue,Severity,Remediation
-            $all += $script:AggregatedResults.Warnings | Select-Object Status,Category,Message,CurrentValue,ExpectedValue,Severity
-            $all | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
+        $html += @"
+            <div class='module-section'>
+                <div class='module-header'>
+                    <span>📋 $moduleName</span>
+                    <span class='module-stats'>✓ $modulePass | ✗ $moduleFail | ⚠ $moduleWarn</span>
+                </div>
+                <div class='module-content'>
+                    <table>
+                        <tr>
+                            <th style='width: 10%'>Status</th>
+                            <th style='width: 25%'>Category</th>
+                            <th style='width: 65%'>Finding</th>
+                        </tr>
+"@
+
+        foreach ($result in $moduleResults) {
+            $statusClass = "status-$($result.Status.ToLower())"
+            $html += @"
+                        <tr>
+                            <td><span class='status $statusClass'>$($result.Status)</span></td>
+                            <td>$([System.Web.HttpUtility]::HtmlEncode($result.Category))</td>
+                            <td>
+                                <strong>$([System.Web.HttpUtility]::HtmlEncode($result.Message))</strong>
+"@
+            if ($result.Details) {
+                $html += "<div class='details'>$([System.Web.HttpUtility]::HtmlEncode($result.Details))</div>"
+            }
+            if ($result.Remediation) {
+                $html += "<div class='remediation'><strong>💡 Remediation:</strong> $([System.Web.HttpUtility]::HtmlEncode($result.Remediation))</div>"
+            }
+            $html += @"
+                            </td>
+                        </tr>
+"@
         }
+
+        $html += @"
+                    </table>
+                </div>
+            </div>
+"@
+    }
+
+    $html += @"
+        </div>
         
-        Default {
-            @"
-===========================================================================
-                  Windows Security Audit Report
-===========================================================================
+        <div class='footer'>
+            Generated by Windows Security Audit Script v$script:ScriptVersion<br>
+            GitHub: <a href="https://github.com/Sandler73/Windows-Security-Audit-Script" style="color: #4fc3f7;">https://github.com/Sandler73/Windows-Security-Audit-Script</a>
+        </div>
+    </div>
+</body>
+</html>
+"@
 
-Host:       $script:Hostname
-OS:         $script:OSName (Build $script:OSBuild)
-Date:       $script:Timestamp
-Frameworks: $($Framework -join ', ')
-Modules:    $($script:ModulesExecuted -join ', ')
+    return $html
+}
 
-===========================================================================
-SUMMARY
-===========================================================================
-Total:      $script:TotalChecks
-Passed:     $($script:AggregatedResults.Passed.Count)
-Failed:     $($script:AggregatedResults.Failed.Count)
-Warnings:   $($script:AggregatedResults.Warnings.Count)
-
-"@ + $(if($script:AggregatedResults.Failed.Count -gt 0){
-"`n===========================================================================
-FAILED CHECKS
-===========================================================================
-
-" + $(($script:AggregatedResults.Failed | Sort-Object {switch($_.Severity){"Critical"{0}"High"{1}"Medium"{2}default{3}}} | ForEach-Object{
-"[$($_.Severity)] $($_.Category): $($_.Message)
-    Current: $($_.CurrentValue) | Expected: $($_.ExpectedValue)
-$(if($_.Details){"    Details: $($_.Details)"})
-$(if($_.Remediation){"    Fix: $($_.Remediation)"})
-
-"}) -join "")}) | Out-File -FilePath $OutputPath -Encoding UTF8
+function Export-Results {
+    param(
+        [array]$AllResults,
+        [hashtable]$ExecutionInfo,
+        [string]$Format,
+        [string]$Path
+    )
+    
+    # Generate default path if not specified
+    if ([string]::IsNullOrEmpty($Path)) {
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $extension = switch ($Format) {
+            "HTML" { "html" }
+            "CSV" { "csv" }
+            "JSON" { "json" }
+            default { "txt" }
+        }
+        $Path = Join-Path $script:ScriptPath "Security-Audit-Report-$timestamp.$extension"
+    }
+    
+    switch ($Format) {
+        "HTML" {
+            $htmlContent = ConvertTo-HTMLReport -AllResults $AllResults -ExecutionInfo $ExecutionInfo
+            $htmlContent | Out-File -FilePath $Path -Encoding UTF8
+            Write-Host "`n[+] HTML report saved to: $Path" -ForegroundColor Green
+        }
+        "CSV" {
+            $AllResults | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
+            Write-Host "`n[+] CSV report saved to: $Path" -ForegroundColor Green
+        }
+        "JSON" {
+            $reportData = @{
+                ExecutionInfo = $ExecutionInfo
+                Results = $AllResults
+            }
+            $reportData | ConvertTo-Json -Depth 10 | Out-File -FilePath $Path -Encoding UTF8
+            Write-Host "`n[+] JSON report saved to: $Path" -ForegroundColor Green
+        }
+        "Console" {
+            # Results already displayed during execution
+            Write-Host "`n[+] Console output complete" -ForegroundColor Green
         }
     }
     
-    Write-Host "`nReport saved: $OutputPath" -ForegroundColor Green
+    return $Path
 }
 
-# Main execution
-Show-Banner
-
-$frameworksToRun = if($Framework -contains 'ALL'){@('CIS','NIST','STIG','MS','Core')}else{$Framework + 'Core'}
-
-Write-Info "Discovering modules..."
-$availableModules = Get-AvailableModules
-
-if($availableModules.Count -eq 0){
-    Write-Warn "No modules found in $ModulePath"
-    Write-Info "Expected: Module-CIS.ps1, Module-NIST.ps1, Module-STIG.ps1, Module-MS.ps1, Module-Core.ps1"
-    exit 1
-}
-
-Write-Info "Found: $($availableModules.Name -join ', ')"
-
-foreach($fw in $frameworksToRun){
-    $module = $availableModules | Where-Object{$_.Name -eq $fw} | Select-Object -First 1
-    if($module){
-        Invoke-SecurityModule -ModuleName $module.Name -ModulePath $module.Path -SeverityFilter $Severity
+# ============================================================================
+# Main Execution
+# ============================================================================
+function Start-SecurityAudit {
+    $startTime = Get-Date
+    
+    Show-Banner
+    
+    # Check prerequisites
+    if (-not (Test-Prerequisites)) {
+        Write-Host "`n[!] Prerequisites check failed. Exiting." -ForegroundColor Red
+        return
+    }
+    
+    # Determine which modules to run
+    $modulesToRun = if ($Modules -contains "All") {
+        @("Core", "CIS", "MS", "NIST", "STIG", "NSA", "CISA")
     } else {
-        Write-Warn "Module '$fw' not found (expected Module-$fw.ps1)"
+        $Modules
     }
+    
+    Write-Host "`n[*] Modules to execute: $($modulesToRun -join ', ')" -ForegroundColor Cyan
+    
+    # Verify all modules exist
+    $missingModules = @()
+    foreach ($module in $modulesToRun) {
+        if (-not (Test-ModuleExists -ModuleName $module)) {
+            $missingModules += $module
+        }
+    }
+    
+    if ($missingModules.Count -gt 0) {
+        Write-Host "`n[!] WARNING: The following modules are missing from the script directory:" -ForegroundColor Yellow
+        foreach ($missing in $missingModules) {
+            $availableModules = Get-AvailableModules
+            Write-Host "    - $($availableModules[$missing]) (Module: $missing)" -ForegroundColor Yellow
+        }
+        Write-Host "`n[*] Script directory: $script:ScriptPath" -ForegroundColor Cyan
+        Write-Host "[*] Continuing with available modules..." -ForegroundColor Yellow
+        $modulesToRun = $modulesToRun | Where-Object { $_ -notin $missingModules }
+        
+        if ($modulesToRun.Count -eq 0) {
+            Write-Host "`n[!] No modules available to run. Exiting." -ForegroundColor Red
+            return
+        }
+    }
+    
+    # Prepare shared data
+    $sharedData = @{
+        ComputerName = $env:COMPUTERNAME
+        OSVersion = (Get-CimInstance -ClassName Win32_OperatingSystem).Caption
+        ScanDate = Get-Date
+        IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        ScriptPath = $script:ScriptPath
+        RemediateIssues = $RemediateIssues.IsPresent
+    }
+    
+    # Execute modules
+    $allResults = @()
+    $successfulModules = @()
+    
+    foreach ($module in $modulesToRun) {
+        try {
+            $moduleResults = Invoke-SecurityModule -ModuleName $module -SharedData $sharedData
+            if ($moduleResults) {
+                $allResults += $moduleResults
+                $successfulModules += $module
+            }
+        }
+        catch {
+            Write-Host "[!] Failed to execute module ${module}: $_" -ForegroundColor Red
+            Write-Host "[!] Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Red
+        }
+    }
+    
+    if ($allResults.Count -eq 0) {
+        Write-Host "`n[!] No results were generated. Check that modules are correctly placed in the script directory." -ForegroundColor Red
+        return
+    }
+    
+    $endTime = Get-Date
+    $duration = $endTime - $startTime
+    
+    # Calculate statistics
+    $executionInfo = @{
+        ComputerName = $sharedData.ComputerName
+        OSVersion = $sharedData.OSVersion
+        ScanDate = $startTime.ToString("yyyy-MM-dd HH:mm:ss")
+        Duration = "{0:hh\:mm\:ss}" -f $duration
+        ModulesRun = $successfulModules
+        TotalChecks = $allResults.Count
+        PassCount = ($allResults | Where-Object { $_.Status -eq "Pass" }).Count
+        FailCount = ($allResults | Where-Object { $_.Status -eq "Fail" }).Count
+        WarningCount = ($allResults | Where-Object { $_.Status -eq "Warning" }).Count
+        InfoCount = ($allResults | Where-Object { $_.Status -eq "Info" }).Count
+        ErrorCount = ($allResults | Where-Object { $_.Status -eq "Error" }).Count
+    }
+    
+    # Display summary
+    Write-Host "`n========================================================================================================" -ForegroundColor Cyan
+    Write-Host "                                    AUDIT SUMMARY" -ForegroundColor Cyan
+    Write-Host "========================================================================================================" -ForegroundColor Cyan
+    Write-Host "Total Checks:    $($executionInfo.TotalChecks)" -ForegroundColor White
+    Write-Host "Passed:          $($executionInfo.PassCount)" -ForegroundColor Green
+    Write-Host "Failed:          $($executionInfo.FailCount)" -ForegroundColor Red
+    Write-Host "Warnings:        $($executionInfo.WarningCount)" -ForegroundColor Yellow
+    Write-Host "Info:            $($executionInfo.InfoCount)" -ForegroundColor Cyan
+    Write-Host "Errors:          $($executionInfo.ErrorCount)" -ForegroundColor Magenta
+    Write-Host "Duration:        $($executionInfo.Duration)" -ForegroundColor White
+    Write-Host "========================================================================================================`n" -ForegroundColor Cyan
+    
+    # Perform remediation if requested
+    if ($RemediateIssues) {
+        Invoke-Remediation -Results $allResults
+    }
+    
+    # Export results
+    if ($OutputFormat -ne "Console") {
+        $outputPath = Export-Results -AllResults $allResults -ExecutionInfo $executionInfo -Format $OutputFormat -Path $OutputPath
+        
+        if ($OutputFormat -eq "HTML" -and (Test-Path $outputPath)) {
+            Write-Host "[*] Opening report in default browser..." -ForegroundColor Cyan
+            Start-Process $outputPath
+        }
+    }
+    
+    Write-Host "`n[+] Audit completed successfully!" -ForegroundColor Green
+    Write-Host "[*] GitHub: https://github.com/Sandler73/Windows-Security-Audit-Script" -ForegroundColor Cyan
 }
 
-# Summary
-Write-Section "Audit Summary"
-Write-Host "Total Checks: $script:TotalChecks" -ForegroundColor Cyan
-Write-Host "Modules: $($script:ModulesExecuted -join ', ')" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Passed:   " -NoNewline; Write-Host $script:AggregatedResults.Passed.Count -ForegroundColor Green
-Write-Host "Failed:   " -NoNewline; Write-Host $script:AggregatedResults.Failed.Count -ForegroundColor Red
-Write-Host "Warnings: " -NoNewline; Write-Host $script:AggregatedResults.Warnings.Count -ForegroundColor Yellow
-
-# Auto-save
-if($AutoSave){
-    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-    $fn = "SecurityAudit_$($env:COMPUTERNAME)_$ts"
-    $path = switch($Format){
-        'HTML'{"$env:USERPROFILE\Desktop\$fn.html"}
-        'JSON'{"$env:USERPROFILE\Desktop\$fn.json"}
-        'CSV'{"$env:USERPROFILE\Desktop\$fn.csv"}
-        Default{"$env:USERPROFILE\Desktop\$fn.txt"}
-    }
-    Export-Report -OutputFormat $Format -OutputPath $path
+# ============================================================================
+# Script Entry Point
+# ============================================================================
+try {
+    Start-SecurityAudit
 }
-
-# Remediation
-if($Remediate){Start-Remediation}
-
-Write-Host "`n[OK] Complete!" -ForegroundColor Green
+catch {
+    Write-Host "`n[!] Fatal error during audit execution:" -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Write-Host "`nStack Trace:" -ForegroundColor Yellow
+    Write-Host $_.ScriptStackTrace -ForegroundColor Yellow
+}
