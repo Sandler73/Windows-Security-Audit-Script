@@ -1,10 +1,35 @@
 # Module-NSA.ps1
 # NSA Windows Security Guidance Compliance Module
-# Based on NSA Cybersecurity Information Sheets and guidance
+# Version: 5.0
+# Based on NSA Cybersecurity Information Sheets and Guidance
+
+<#
+.SYNOPSIS
+    NSA Windows security guidance compliance checks.
+
+.DESCRIPTION
+    This module checks alignment with NSA cybersecurity guidance including:
+    - Secure Boot configuration
+    - Application whitelisting (AppLocker/WDAC)
+    - Credential protection (Credential Guard, LSASS protection)
+    - Remote Desktop security
+    - PowerShell security (logging, v2 removal)
+    - SMB security and signing
+    - Windows Defender configuration
+    - Audit and logging policies
+    - Network hardening (LLMNR, NetBIOS)
+
+.PARAMETER SharedData
+    Hashtable containing shared data from the main script
+
+.NOTES
+    Version: 5.0
+    Based on: NSA Cybersecurity Technical Reports
+#>
 
 param(
-#    [Parameter(Mandatory=$false)]
-#    [object]$SharedData
+    [Parameter(Mandatory=$false)]
+    [hashtable]$SharedData = @{}
 )
 
 $moduleName = "NSA"
@@ -173,7 +198,7 @@ try {
         Add-Result -Category "NSA - Credential Protection" -Status "Fail" `
             -Message "LSASS is not running as Protected Process" `
             -Details "NSA Guidance: Enable PPL to protect credentials in memory" `
-            -Remediation "Set registry: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\RunAsPPL = 1, then reboot"
+            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -Value 1; Restart-Computer"
     }
 } catch {
     Add-Result -Category "NSA - Credential Protection" -Status "Error" `
@@ -243,7 +268,7 @@ try {
             Add-Result -Category "NSA - Remote Access" -Status "Warning" `
                 -Message "RDP: Encryption level may not be set to High" `
                 -Details "NSA Guidance: Set RDP encryption to High" `
-                -Remediation "Configure via Group Policy: Computer Configuration > Windows Components > Remote Desktop Services > Encryption Level"
+                -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name MinEncryptionLevel -Value 3"
         }
     }
 } catch {
@@ -268,7 +293,7 @@ try {
             Add-Result -Category "NSA - PowerShell Security" -Status "Fail" `
                 -Message "PowerShell v2 is enabled" `
                 -Details "NSA Guidance: Disable PowerShell v2 (lacks security features)" `
-                -Remediation "Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root"
+                -Remediation "Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root -NoRestart"
         }
     }
 } catch {
@@ -288,7 +313,7 @@ try {
         Add-Result -Category "NSA - PowerShell Security" -Status "Warning" `
             -Message "PowerShell Script Block Logging is not enabled" `
             -Details "NSA Guidance: Enable logging to detect malicious PowerShell activity" `
-            -Remediation "Enable via Group Policy: Computer Configuration > Administrative Templates > Windows Components > Windows PowerShell"
+            -Remediation "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name EnableScriptBlockLogging -Value 1"
     }
     
     $moduleLogging = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging" -Name "EnableModuleLogging" -ErrorAction SilentlyContinue
@@ -297,10 +322,9 @@ try {
             -Message "PowerShell Module Logging is enabled" `
             -Details "NSA Guidance: Comprehensive logging aids threat detection"
     } else {
-        Add-Result -Category "NSA - PowerShell Security" -Status "Warning" `
+        Add-Result -Category "NSA - PowerShell Security" -Status "Info" `
             -Message "PowerShell Module Logging is not enabled" `
-            -Details "NSA Guidance: Enable module logging" `
-            -Remediation "Enable via Group Policy"
+            -Details "NSA Guidance: Enable module logging for comprehensive auditing"
     }
     
     $transcription = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription" -Name "EnableTranscripting" -ErrorAction SilentlyContinue
@@ -309,10 +333,9 @@ try {
             -Message "PowerShell Transcription is enabled" `
             -Details "NSA Guidance: Transcription logs complete PowerShell session activity"
     } else {
-        Add-Result -Category "NSA - PowerShell Security" -Status "Warning" `
+        Add-Result -Category "NSA - PowerShell Security" -Status "Info" `
             -Message "PowerShell Transcription is not enabled" `
-            -Details "NSA Guidance: Enable transcription for full session logging" `
-            -Remediation "Enable via Group Policy"
+            -Details "NSA Guidance: Enable transcription for full session logging"
     }
 } catch {
     Add-Result -Category "NSA - PowerShell Security" -Status "Error" `
@@ -335,7 +358,7 @@ try {
         Add-Result -Category "NSA - Network Protocol Security" -Status "Fail" `
             -Message "SMBv1 protocol is enabled" `
             -Details "NSA Guidance: SMBv1 has critical vulnerabilities - disable immediately" `
-            -Remediation "Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force"
+            -Remediation "Set-SmbServerConfiguration -EnableSMB1Protocol `$false -Force"
     }
 } catch {
     Add-Result -Category "NSA - Network Protocol Security" -Status "Error" `
@@ -353,7 +376,7 @@ try {
         Add-Result -Category "NSA - Network Protocol Security" -Status "Warning" `
             -Message "SMB signing is not required" `
             -Details "NSA Guidance: Require SMB signing to prevent tampering" `
-            -Remediation "Set-SmbServerConfiguration -RequireSecuritySignature $true -Force"
+            -Remediation "Set-SmbServerConfiguration -RequireSecuritySignature `$true -Force"
     }
 } catch {
     Add-Result -Category "NSA - Network Protocol Security" -Status "Error" `
@@ -395,7 +418,7 @@ try {
             Add-Result -Category "NSA - Endpoint Protection" -Status "Fail" `
                 -Message "Windows Defender real-time protection is disabled" `
                 -Details "NSA Guidance: Enable endpoint protection" `
-                -Remediation "Set-MpPreference -DisableRealtimeMonitoring $false"
+                -Remediation "Set-MpPreference -DisableRealtimeMonitoring `$false"
         }
         
         # Cloud-delivered protection
@@ -419,7 +442,7 @@ try {
             Add-Result -Category "NSA - Endpoint Protection" -Status "Warning" `
                 -Message "Behavior monitoring is disabled" `
                 -Details "NSA Guidance: Enable behavior monitoring" `
-                -Remediation "Set-MpPreference -DisableBehaviorMonitoring $false"
+                -Remediation "Set-MpPreference -DisableBehaviorMonitoring `$false"
         }
         
         # IOAV protection
@@ -431,7 +454,7 @@ try {
             Add-Result -Category "NSA - Endpoint Protection" -Status "Warning" `
                 -Message "Downloaded file scanning is disabled" `
                 -Details "NSA Guidance: Enable IOAV protection" `
-                -Remediation "Set-MpPreference -DisableIOAVProtection $false"
+                -Remediation "Set-MpPreference -DisableIOAVProtection `$false"
         }
         
         # Signature updates
@@ -487,7 +510,7 @@ try {
         Add-Result -Category "NSA - Audit and Logging" -Status "Warning" `
             -Message "Advanced Audit Policy may not be in effect" `
             -Details "NSA Guidance: Enable Advanced Audit Policy" `
-            -Remediation "Enable via Group Policy: Security Options > Audit: Force audit policy subcategory settings"
+            -Remediation "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name SCENoApplyLegacyAuditPolicy -Value 1"
     }
 } catch {
     Add-Result -Category "NSA - Audit and Logging" -Status "Error" `
@@ -513,7 +536,7 @@ foreach ($category in $criticalAudits) {
             Add-Result -Category "NSA - Audit and Logging" -Status "Warning" `
                 -Message "Auditing not configured for: $category" `
                 -Details "NSA Guidance: Enable auditing for security events" `
-                -Remediation "Configure via Group Policy: Advanced Audit Policy"
+                -Remediation "auditpol /set /category:'$category' /success:enable /failure:enable"
         }
     } catch {
         # Continue checking other categories
@@ -532,11 +555,11 @@ try {
         $fwProfile = Get-NetFirewallProfile -Name $profile
         if ($fwProfile.Enabled) {
             Add-Result -Category "NSA - Network Hardening" -Status "Pass" `
-                -Message "$profile firewall profile is enabled" `
+                -Message "${profile} firewall profile is enabled" `
                 -Details "NSA Guidance: Enable Windows Firewall on all profiles"
         } else {
             Add-Result -Category "NSA - Network Hardening" -Status "Fail" `
-                -Message "$profile firewall profile is disabled" `
+                -Message "${profile} firewall profile is disabled" `
                 -Details "NSA Guidance: Enable firewall protection" `
                 -Remediation "Set-NetFirewallProfile -Name $profile -Enabled True"
         }
@@ -557,7 +580,7 @@ try {
         Add-Result -Category "NSA - Network Hardening" -Status "Warning" `
             -Message "LLMNR may be enabled" `
             -Details "NSA Guidance: Disable LLMNR (Link-Local Multicast Name Resolution)" `
-            -Remediation "Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name EnableMulticast -Value 0"
+            -Remediation "New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name EnableMulticast -Value 0"
     }
 } catch {
     Add-Result -Category "NSA - Network Hardening" -Status "Info" `
