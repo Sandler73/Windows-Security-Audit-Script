@@ -1,6 +1,6 @@
 # Windows-Security-Audit-Script.ps1
 # Comprehensive Windows Security Audit Script
-# Version: 5.1 - Phase 1: Enhanced Statistics Tracking
+# Version: 5.2
 # GitHub: https://github.com/Sandler73/Windows-Security-Audit-Script
 
 <#
@@ -746,6 +746,17 @@ function ConvertTo-HTMLReport {
             GitHub: <a href='https://github.com/Sandler73/Windows-Security-Audit-Script'>GitHub Repository</a>
         </div>
     </div>
+    <div id='exportModal' class='modal'>
+        <div class='modal-content'>
+            <span class='modal-close' onclick='closeExportModal()'>&times;</span>
+            <div class='modal-header'>Select Export Format</div>
+            <div class='format-option' onclick='executeExport("csv")'>CSV</div>
+            <div class='format-option' onclick='executeExport("excel")'>Excel</div>
+            <div class='format-option' onclick='executeExport("json")'>JSON</div>
+            <div class='format-option' onclick='executeExport("xml")'>XML</div>
+            <div class='format-option' onclick='executeExport("txt")'>TXT</div>
+        </div>
+    </div>
     <script>
         let currentExportMode = null;
         let currentTableId = null;
@@ -811,7 +822,7 @@ function ConvertTo-HTMLReport {
         }
         
         function executeExport(format) {
-            closeExportModal();
+            console.log('executeExport called', currentExportMode, currentTableId, format);
             
             switch(currentExportMode) {
                 case 'all':
@@ -826,28 +837,56 @@ function ConvertTo-HTMLReport {
                 case 'module-selected':
                     exportModuleSelected(currentTableId, format);
                     break;
+                default:
+                    console.warn('Unknown export mode:', currentExportMode);
             }
+            
+            closeExportModal();
         }
         
+        function getCellText(cell) {
+            let text = '';
+            const strong = cell.querySelector('strong');
+            if (strong) {
+                text += strong.textContent.trim() + '\\n\\n';
+            }
+            const details = cell.querySelector('.details');
+            if (details) {
+                text += 'Details: ' + details.textContent.trim() + '\\n\\n';
+            }
+            const remediation = cell.querySelector('.remediation');
+            if (remediation) {
+                text += remediation.textContent.trim() + '\\n';
+            }
+            return text.trim();
+        }
         // Get data from table
         function getTableData(tableId, selectedOnly = false) {
             const table = document.getElementById(tableId);
             const moduleName = table.closest('.module-section').querySelector('.module-header span:first-child').textContent.replace('MODULE: ', '').trim();
             const headers = ['Status', 'Category', 'Finding'];
-            
+    
             let rows;
             if (selectedOnly) {
                 const selected = table.querySelectorAll('tbody .row-checkbox:checked');
                 rows = Array.from(selected).map(cb => cb.closest('tr'));
-            } else {
-                rows = Array.from(table.querySelectorAll('tbody tr')).filter(row => row.style.display !== 'none');
-            }
-            
-            const data = rows.map(row => 
-                Array.from(row.cells).slice(1).map(cell => cell.textContent.trim())
-            );
-            
-            return { moduleName, headers, data };
+        } else {
+            rows = Array.from(table.querySelectorAll('tbody tr')).filter(row => row.style.display !== 'none');
+        }
+    
+        const data = rows.map(row => 
+            Array.from(row.cells).slice(1).map((cell, cellIndex) => {
+                if (cellIndex === 0) {
+                    return cell.querySelector('.status') ? cell.querySelector('.status').textContent.trim() : cell.textContent.trim();
+                } else if (cellIndex === 2) {
+                    return getCellText(cell);
+                } else {
+                    return cell.textContent.trim();
+                }
+            })
+        );
+    
+        return { moduleName, headers, data };
         }
         
         // Export single module
@@ -934,13 +973,13 @@ function ConvertTo-HTMLReport {
             let csv = '';
             
             moduleDataArray.forEach((moduleData, index) => {
-                if (index > 0) csv += '\\n\\n';
-                
-                csv += '=== ' + moduleData.moduleName + ' ===\\n';
-                csv += moduleData.headers.map(h => '"' + h.replace(/"/g, '""') + '"').join(',') + '\\n';
-                
+                if (index > 0) csv += '\r\n\r\n';
+        
+                csv += '=== ' + moduleData.moduleName + ' ===\r\n';
+                csv += moduleData.headers.map(h => '"' + h.replace(/"/g, '""') + '"').join(',') + '\r\n';
+        
                 moduleData.data.forEach(row => {
-                    csv += row.map(cell => '"' + cell.replace(/"/g, '""') + '"').join(',') + '\\n';
+                    csv += row.map(cell => '"' + cell.replace(/"/g, '""').replace(/\r?\n/g, '\r\n') + '"').join(',') + '\r\n';
                 });
             });
             
@@ -949,26 +988,27 @@ function ConvertTo-HTMLReport {
         
         // Excel Export - separate sheet per module
         function exportToExcel(moduleDataArray, filename) {
-            let html = '<html><head><meta charset="utf-8"></head><body>';
-            
+            let html = '<html>\n<head><meta charset="utf-8"></head>\n<body>\n';
+    
             moduleDataArray.forEach((moduleData, index) => {
-                html += '<table>';
-                html += '<tr><td colspan="' + moduleData.headers.length + '" style="font-weight:bold;font-size:14pt;background:#667eea;color:white;padding:10px;">' + escapeHtml(moduleData.moduleName) + '</td></tr>';
-                html += '<tr>' + moduleData.headers.map(h => '<th style="background:#667eea;color:white;font-weight:bold;padding:8px;">' + escapeHtml(h) + '</th>').join('') + '</tr>';
-                
-                moduleData.data.forEach(row => {
-                    html += '<tr>' + row.map(cell => '<td style="padding:5px;border:1px solid #ddd;">' + escapeHtml(cell) + '</td>').join('') + '</tr>';
-                });
-                
-                html += '</table>';
-                if (index < moduleDataArray.length - 1) {
-                    html += '<br><br>';
-                }
+                html += '<table>\n';
+                html += '<tr><td colspan="' + moduleData.headers.length + '" style="font-weight:bold;font-size:14pt;background:#667eea;color:white;padding:10px;">' + escapeHtml(moduleData.moduleName) + '</td></tr>\n';
+                html += '<tr>' + moduleData.headers.map(h => '<th style="background:#667eea;color:white;font-weight:bold;padding:8px;">' + escapeHtml(h) + '</th>').join('') + '</tr>\n';
+        
+            moduleData.data.forEach(row => {
+                html += '<tr>' + row.map(cell => '<td style="padding:5px;border:1px solid #ddd; white-space:pre-wrap;">' + escapeHtml(cell).replace(/\n/g, '<br />') + '</td>').join('') + '</tr>\n';
             });
-            
-            html += '</body></html>';
-            downloadFile(html, filename, 'application/vnd.ms-excel');
-        }
+        
+            html += '</table>\n';
+            if (index < moduleDataArray.length - 1) {
+                html += '<br><br>\n';
+            }
+        });
+    
+        html += '</body>\n</html>';
+        html = html.replace(/\n/g, '\r\n');
+        downloadFile(html, filename + '.xls', 'application/vnd.ms-excel');
+    }
         
         // JSON Export
         function exportToJSON(moduleDataArray, filename) {
@@ -993,56 +1033,50 @@ function ConvertTo-HTMLReport {
         
         // XML Export
         function exportToXML(moduleDataArray, filename) {
-            let xml = '<?xml version="1.0" encoding="UTF-8"?>\\n';
-            xml += '<SecurityAuditReport>\\n';
-            xml += '  <ExportDate>' + new Date().toISOString() + '</ExportDate>\\n';
-            xml += '  <Modules>\\n';
-            
+            let xml = '<?xml version="1.0" encoding="UTF-8"?><events>\r\n';
+    
             moduleDataArray.forEach(moduleData => {
-                xml += '    <Module name="' + escapeXml(moduleData.moduleName) + '">\\n';
-                xml += '      <Results>\\n';
-                
                 moduleData.data.forEach(row => {
-                    xml += '        <Result>\\n';
+                    xml += '  <event>\r\n';
+                    xml += '    <module>' + escapeXml(moduleData.moduleName) + '</module>\r\n';
                     moduleData.headers.forEach((header, i) => {
-                        xml += '          <' + header.replace(/\\s+/g, '') + '>' + escapeXml(row[i]) + '</' + header.replace(/\\s+/g, '') + '>\\n';
+                        const tagName = header.replace(/\s+/g, '').toLowerCase();
+                        xml += '    <' + tagName + '>' + escapeXml(row[i]).replace(/\r?\n/g, '&#10;') + '</' + tagName + '>\r\n';
                     });
-                    xml += '        </Result>\\n';
+                    xml += '  </event>\r\n';
                 });
-                
-                xml += '      </Results>\\n';
-                xml += '    </Module>\\n';
             });
-            
-            xml += '  </Modules>\\n';
-            xml += '</SecurityAuditReport>';
-            
-            downloadFile(xml, filename, 'application/xml');
+    
+            xml += '</events>';
+    
+            downloadFile(xml, filename + '.xml', 'application/xml');
         }
         
         // TXT Export
         function exportToTXT(moduleDataArray, filename) {
-            let txt = 'WINDOWS SECURITY AUDIT REPORT\\n';
-            txt += '================================\\n';
-            txt += 'Export Date: ' + new Date().toLocaleString() + '\\n\\n';
+            let txt = 'WINDOWS SECURITY AUDIT REPORT\r\n';
+            txt += '================================\r\n';
+            txt += 'Export Date: ' + new Date().toLocaleString() + '\r\n\r\n';
             
             moduleDataArray.forEach((moduleData, index) => {
-                if (index > 0) txt += '\\n\\n';
+                if (index > 0) txt += '\r\n\r\n';
                 
-                txt += '='.repeat(60) + '\\n';
-                txt += 'MODULE: ' + moduleData.moduleName + '\\n';
-                txt += '='.repeat(60) + '\\n\\n';
+                txt += '='.repeat(60) + '\r\n';
+                txt += 'MODULE: ' + moduleData.moduleName + '\r\n';
+                txt += '='.repeat(60) + '\r\n\r\n';
                 
                 const colWidths = moduleData.headers.map((h, i) => {
-                    const maxDataWidth = Math.max(...moduleData.data.map(row => row[i].length));
+                    const processedData = moduleData.data.map(row => row[i].replace(/\r?\n/g, ' | ').length);
+                    const maxDataWidth = Math.max(...processedData);
                     return Math.max(h.length, maxDataWidth, 10);
                 });
                 
-                txt += moduleData.headers.map((h, i) => h.padEnd(colWidths[i])).join(' | ') + '\\n';
-                txt += colWidths.map(w => '-'.repeat(w)).join('-+-') + '\\n';
+                txt += moduleData.headers.map((h, i) => h.padEnd(colWidths[i])).join(' | ') + '\r\n';
+                txt += colWidths.map(w => '-'.repeat(w)).join('-+-') + '\r\n';
                 
                 moduleData.data.forEach(row => {
-                    txt += row.map((cell, i) => cell.padEnd(colWidths[i])).join(' | ') + '\\n';
+                    const processedRow = row.map(cell => cell.replace(/\r?\n/g, ' | '));
+                    txt += processedRow.map((cell, i) => cell.padEnd(colWidths[i])).join(' | ') + '\r\n';
                 });
             });
             
@@ -1051,12 +1085,13 @@ function ConvertTo-HTMLReport {
         
         // Utility functions
         function downloadFile(content, filename, mimeType) {
-            const blob = new Blob([content], { type: mimeType });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = filename;
-            link.click();
-            URL.revokeObjectURL(link.href);
+            const element = document.createElement('a');
+            element.setAttribute('href', 'data:' + mimeType + ';charset=utf-8,' + encodeURIComponent(content));
+            element.setAttribute('download', filename);
+            element.style.display = 'none';
+            document.body.appendChild(element);
+            element.click();
+            document.body.removeChild(element);
         }
         
         function escapeHtml(text) {
