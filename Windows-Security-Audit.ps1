@@ -1,11 +1,11 @@
 # Windows-Security-Audit-Script.ps1
 # Comprehensive Windows Security Audit Script
-# Version: 5.2
+# Version: 6.0
 # GitHub: https://github.com/Sandler73/Windows-Security-Audit-Script
 
 <#
 .SYNOPSIS
-    Comprehensive Windows security audit script supporting multiple compliance frameworks.
+    Comprehensive module-based Windows security audit script supporting multiple compliance frameworks.
 
 .DESCRIPTION
     This script audits Windows systems against multiple security frameworks including:
@@ -22,40 +22,60 @@
     Default: All
 
 .PARAMETER OutputFormat
-    Output format: HTML, CSV, JSON, or Console
+    Output format: HTML, CSV, JSON, XML, or Console
     Default: HTML
 
 .PARAMETER OutputPath
-    Path for output file (for HTML, CSV, JSON formats)
-    Default: .\Security-Audit-Report-[timestamp].[ext]
+    Path for output file (for HTML, CSV, JSON, XML formats)
+    Default: .\Windows-Security-Audit-Report-[timestamp].[ext]
 
 .PARAMETER RemediateIssues
-    Attempt to automatically remediate failed checks where possible
+    Attempt to interactively remediate failed checks where possible
 
-.PARAMETER Verbose
-    Enable verbose output during execution
+.PARAMETER RemediateIssues_Fail
+    Remediate only FAIL status issues
+
+.PARAMETER RemediateIssues_Warning
+    Remediate only WARNING status issues
+
+.PARAMETER RemediateIssues_Info
+    Remediate only INFO status issues
+
+.PARAMETER AutoRemediate
+    Automatically remediate without prompting (requires confirmation)
+
+.PARAMETER RemediationFile
+    JSON file containing specific issues to remediate (exported from HTML report)
 
 .EXAMPLE
     .\Windows-Security-Audit-Script.ps1
-    Run all modules with HTML output
+    Run all modules with default HTML output
 
 .EXAMPLE
     .\Windows-Security-Audit-Script.ps1 -Modules Core,NIST,CISA -OutputFormat CSV
     Run specific modules and output to CSV
 
 .EXAMPLE
-    .\Windows-Security-Audit-Script.ps1 -RemediateIssues
-    Run audit and attempt to fix issues
+    .\Windows-Security-Audit-Script.ps1 -OutputFormat XML
+    Generate XML report suitable for SIEM ingestion
+
+.EXAMPLE
+    .\Windows-Security-Audit-Script.ps1 -RemediateIssues_Fail -AutoRemediate
+    Automatically remediate all FAIL status issues with safety confirmations
+
+.EXAMPLE
+    .\Windows-Security-Audit-Script.ps1 -AutoRemediate -RemediationFile "selected-issues.json"
+    Automatically remediate only specific issues from exported JSON file
 
 .NOTES
     Requires: Windows 10/11 or Windows Server 2016+, PowerShell 5.1+
     Run as Administrator for complete results
     
-.CHANGES in v5.1
-    - Enhanced statistics tracking and validation
-    - Fixed module result counting issues
-    - Improved error handling and logging
-    - Added result normalization for consistency
+    REMEDIATION WORKFLOW:
+    1. Run audit: .\Windows-Security-Audit.ps1
+    2. Review HTML report and select specific issues to fix
+    3. Export selected issues to JSON using "Export Selected" button
+    4. Run auto-remediation: .\Windows-Security-Audit.ps1 -AutoRemediate -RemediationFile "Selected-Report.json"
 #>
 
 param(
@@ -64,29 +84,48 @@ param(
     [string[]]$Modules = @("All"),
     
     [Parameter(Mandatory=$false)]
-    [ValidateSet("HTML","CSV","JSON","Console")]
+    [ValidateSet("HTML","CSV","JSON","XML","Console")]
     [string]$OutputFormat = "HTML",
     
     [Parameter(Mandatory=$false)]
     [string]$OutputPath = "",
     
     [Parameter(Mandatory=$false)]
-    [switch]$RemediateIssues
+    [switch]$RemediateIssues,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$RemediateIssues_Fail,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$RemediateIssues_Warning,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$RemediateIssues_Info,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$AutoRemediate,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$RemediationFile = ""
 )
+
 # ============================================================================
 # Script Configuration
 # ============================================================================
 $ErrorActionPreference = "Continue"
-$script:ScriptVersion = "5.1"
+$script:ScriptVersion = "5.3"
 $script:ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+
 # Valid status values for normalization
 $script:ValidStatusValues = @("Pass", "Fail", "Warning", "Info", "Error")
+
 # Statistics tracking
 $script:StatisticsLog = @{
     ValidationIssues = @()
     NormalizedResults = 0
     ModuleStats = @{}
 }
+
 # ============================================================================
 # Banner
 # ============================================================================
@@ -105,46 +144,50 @@ function Show-Banner {
     Write-Host "  - CISA Best Practices" -ForegroundColor Gray
     Write-Host "`n========================================================================================================`n" -ForegroundColor Cyan
 }
+
 # ============================================================================
 # Prerequisites Check
 # ============================================================================
 function Test-Prerequisites {
     Write-Host "[*] Checking prerequisites..." -ForegroundColor Yellow
-	# Check PowerShell version
+    
+    # Check PowerShell version
     $psVersion = $PSVersionTable.PSVersion
     if ($psVersion.Major -lt 5) {
         Write-Host "[!] PowerShell 5.1 or higher required. Current: $psVersion" -ForegroundColor Red
         return $false
     }
     Write-Host "[+] PowerShell version: $psVersion" -ForegroundColor Green
+    
     # Check if running as Administrator
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
         Write-Host "[!] WARNING: Not running as Administrator" -ForegroundColor Yellow
-        if ($RemediateIssues) {
+        if ($RemediateIssues -or $RemediateIssues_Fail -or $RemediateIssues_Warning -or $RemediateIssues_Info) {
             Write-Host "[!] ERROR: Remediation requires Administrator privileges" -ForegroundColor Red
             return $false
         }
     } else {
         Write-Host "[+] Running with Administrator privileges" -ForegroundColor Green
     }
+    
     # Check OS version
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
     Write-Host "[+] Operating System: $($os.Caption) (Build $($os.BuildNumber))" -ForegroundColor Green
+    
     return $true
 }
+
 # ============================================================================
 # Result Validation and Normalization Functions
 # ============================================================================
 function Test-ResultObject {
-    <#
-    .SYNOPSIS
-        Validates that a result object has all required properties and valid values.
-    #>
     param([PSCustomObject]$Result, [string]$ModuleName)
+    
     $isValid = $true
     $issues = @()
-	# Required properties
+    
+    # Required properties
     $requiredProperties = @("Module", "Category", "Message", "Status")
     foreach ($prop in $requiredProperties) {
         if (-not $Result.PSObject.Properties[$prop]) {
@@ -152,12 +195,14 @@ function Test-ResultObject {
             $issues += "Missing: $prop"
         }
     }
-	# Validate Status value
+    
+    # Validate Status value
     if ($Result.Status -and $Result.Status -notin $script:ValidStatusValues) {
         $isValid = $false
         $issues += "Invalid Status: '$($Result.Status)'"
     }
-	# Log validation issues
+    
+    # Log validation issues
     if (-not $isValid) {
         $script:StatisticsLog.ValidationIssues += [PSCustomObject]@{
             Module = $ModuleName
@@ -165,36 +210,38 @@ function Test-ResultObject {
             Timestamp = Get-Date
         }
     }
+    
     return $isValid
 }
+
 # ============================================================================
-# Data Repair Function
+# Result Correction
 # ============================================================================
 function Repair-ResultObject {
-    <#
-    .SYNOPSIS
-        Attempts to repair/normalize a result object with missing or invalid properties.
-    #>
     param([PSCustomObject]$Result, [string]$ModuleName)
+    
     $normalized = $false
-	# Ensure Module property exists
+    
+    # Ensure Module property exists
     if (-not $Result.Module) {
         $Result | Add-Member -NotePropertyName "Module" -NotePropertyValue $ModuleName -Force
         $normalized = $true
     }
-	# Ensure Category exists
+    
+    # Ensure Category exists
     if (-not $Result.Category) {
         $Result | Add-Member -NotePropertyName "Category" -NotePropertyValue "Uncategorized" -Force
         $normalized = $true
     }
-	# Ensure Message exists
+    
+    # Ensure Message exists
     if (-not $Result.Message) {
         $Result | Add-Member -NotePropertyName "Message" -NotePropertyValue "No message" -Force
         $normalized = $true
     }
-	# Normalize Status value (case-insensitive matching)
+    
+    # Normalize Status value (case-insensitive matching)
     if ($Result.Status) {
-		# Try case-insensitive match
         $matchedStatus = $script:ValidStatusValues | Where-Object { $_.ToLower() -eq $Result.Status.ToLower() } | Select-Object -First 1
         if ($matchedStatus -and $Result.Status -ne $matchedStatus) {
             $Result.Status = $matchedStatus
@@ -204,56 +251,51 @@ function Repair-ResultObject {
             $normalized = $true
         }
     } else {
-		# Invalid status - default to Error
         $Result | Add-Member -NotePropertyName "Status" -NotePropertyValue "Error" -Force
         $normalized = $true
     }
-	# Ensure optional properties exist
+    
+    # Ensure optional properties exist
     if (-not $Result.Details) {
         $Result | Add-Member -NotePropertyName "Details" -NotePropertyValue "" -Force
     }
     if (-not $Result.Remediation) {
         $Result | Add-Member -NotePropertyName "Remediation" -NotePropertyValue "" -Force
     }
+    
     if ($normalized) { $script:StatisticsLog.NormalizedResults++ }
     return $Result
 }
-# ============================================================================
-# Data Validation Function
-# ============================================================================
+
 function Get-ValidatedResults {
-    <#
-    .SYNOPSIS
-        Validates and normalizes an array of results from a module.
-    #>
     param([array]$Results, [string]$ModuleName)
+    
     if (-not $Results -or $Results.Count -eq 0) {
         Write-Host "[!] Module $ModuleName returned no results" -ForegroundColor Yellow
         return @()
     }
+    
     $validatedResults = @()
     foreach ($result in $Results) {
         if (Test-ResultObject -Result $result -ModuleName $ModuleName) {
             $validatedResults += $result
         } else {
-			# Try to repair the result
             $repairedResult = Repair-ResultObject -Result $result -ModuleName $ModuleName
             if (Test-ResultObject -Result $repairedResult -ModuleName $ModuleName) {
                 $validatedResults += $repairedResult
             }
         }
     }
+    
     return $validatedResults
 }
+
 # ============================================================================
-# Data Tabulation Function
+# Module Statistics
 # ============================================================================
 function Get-ModuleStatistics {
-    <#
-    .SYNOPSIS
-        Calculates accurate statistics for a module's results.
-    #>
     param([array]$Results)
+    
     return [PSCustomObject]@{
         Total = $Results.Count
         Pass = ($Results | Where-Object { $_.Status -eq "Pass" }).Count
@@ -263,6 +305,7 @@ function Get-ModuleStatistics {
         Error = ($Results | Where-Object { $_.Status -eq "Error" }).Count
     }
 }
+
 # ============================================================================
 # Module Management
 # ============================================================================
@@ -277,37 +320,45 @@ function Get-AvailableModules {
         "CISA" = "Modules\Module-CISA.ps1"
     }
 }
+
 # ============================================================================
-# Module Detection Function
+# Module Presence Verification
 # ============================================================================
 function Test-ModuleExists {
     param([string]$ModuleName)
+    
     $availableModules = Get-AvailableModules
     if (-not $availableModules.ContainsKey($ModuleName)) { return $false }
+    
     $modulePath = Join-Path $script:ScriptPath $availableModules[$ModuleName]
     return (Test-Path $modulePath)
 }
-# ============================================================================
-# Module Data Security Function
-# ============================================================================
+
 function Invoke-SecurityModule {
     param([string]$ModuleName, [hashtable]$SharedData)
+    
     $availableModules = Get-AvailableModules
     $modulePath = Join-Path $script:ScriptPath $availableModules[$ModuleName]
+    
     if (-not (Test-Path $modulePath)) {
         Write-Host "[!] Module not found: $ModuleName" -ForegroundColor Red
         return $null
     }
+    
     try {
         Write-Host "`n[*] Executing module: $ModuleName" -ForegroundColor Cyan
         $scriptBlock = [ScriptBlock]::Create("param([hashtable]`$SharedData); & '$modulePath' -SharedData `$SharedData")
         $results = Invoke-Command -ScriptBlock $scriptBlock -ArgumentList $SharedData
+        
         # Validate and normalize results
-		$validatedResults = Get-ValidatedResults -Results $results -ModuleName $ModuleName
-		# Calculate and display module statistics
+        $validatedResults = Get-ValidatedResults -Results $results -ModuleName $ModuleName
+        
+        # Calculate and display module statistics
         $moduleStats = Get-ModuleStatistics -Results $validatedResults
         $script:StatisticsLog.ModuleStats[$ModuleName] = $moduleStats
+        
         Write-Host "[+] Module $ModuleName completed: $($moduleStats.Total) checks ($($moduleStats.Pass) pass, $($moduleStats.Fail) fail, $($moduleStats.Warning) warning, $($moduleStats.Info) info, $($moduleStats.Error) error)" -ForegroundColor Green
+        
         return $validatedResults
     }
     catch {
@@ -315,49 +366,299 @@ function Invoke-SecurityModule {
         return $null
     }
 }
+
 # ============================================================================
-# Remediation Functions
+# Enhanced Remediation Functions
 # ============================================================================
 function Invoke-Remediation {
     param([array]$Results)
-    if (-not $RemediateIssues) { return }
+    
+    # Determine which remediation mode to use
+    $remediateAll = $RemediateIssues.IsPresent
+    $remediateFail = $RemediateIssues_Fail.IsPresent
+    $remediateWarning = $RemediateIssues_Warning.IsPresent
+    $remediateInfo = $RemediateIssues_Info.IsPresent
+    $autoMode = $AutoRemediate.IsPresent
+    $hasRemediationFile = -not [string]::IsNullOrEmpty($RemediationFile)
+    
+    # Exit if no remediation flags are set
+    if (-not ($remediateAll -or $remediateFail -or $remediateWarning -or $remediateInfo)) {
+        return
+    }
+    
     Write-Host "`n=======================================================================================================" -ForegroundColor Yellow
     Write-Host "                                  REMEDIATION MODE" -ForegroundColor Yellow
     Write-Host "========================================================================================================`n" -ForegroundColor Yellow
-    $failedResults = $Results | Where-Object { $_.Status -eq "Fail" -and $_.Remediation }
-    if ($failedResults.Count -eq 0) {
-        Write-Host "[*] No failed checks with remediation available" -ForegroundColor Cyan
-        return
-    }
-    Write-Host "[*] Found $($failedResults.Count) failed check(s) with remediation available" -ForegroundColor Yellow
-    $remediatedCount = 0
-    $failedRemediationCount = 0
-    foreach ($result in $failedResults) {
-        Write-Host "`n[*] Remediate: $($result.Message)" -ForegroundColor Cyan
-        Write-Host "    Category: $($result.Category)" -ForegroundColor Gray
-        Write-Host "    Remediation: $($result.Remediation)" -ForegroundColor Gray
-        $response = Read-Host "    Apply? (Y/N)"
-        if ($response -eq 'Y' -or $response -eq 'y') {
-            try {
-                $remediationScript = [ScriptBlock]::Create($result.Remediation)
-                Invoke-Command -ScriptBlock $remediationScript
-                Write-Host "    [+] Applied successfully" -ForegroundColor Green
-                $remediatedCount++
+    
+    # Handle RemediationFile mode
+    if ($hasRemediationFile) {
+        if (-not (Test-Path $RemediationFile)) {
+            Write-Host "[!] ERROR: Remediation file not found: $RemediationFile" -ForegroundColor Red
+            Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+            return
+        }
+        
+        Write-Host "[*] Mode: Targeted remediation from file" -ForegroundColor Cyan
+        Write-Host "[*] File: $RemediationFile" -ForegroundColor Gray
+        
+        try {
+            $remediationData = Get-Content -Path $RemediationFile -Raw | ConvertFrom-Json
+			
+            # ============================================================================
+			# Remediation File Format
+			# ============================================================================
+			# The -RemediationFile parameter accepts a JSON file exported from the HTML report.
+			# Expected format:
+			# {
+			#   "exportDate": "2025-01-01T00:00:00Z",
+			#   "modules": [
+			#     {
+			#       "moduleName": "Core",
+			#       "results": [
+			#         {
+			#           "Status": "Fail",
+			#           "Category": "Security",
+			#           "Finding": "Issue description"
+			#         }
+			#       ]
+			#     }
+			#   ]
+			# }
+			# 
+			# This matches the JSON structure exported by the "Export Selected" feature in the HTML report.
+			
+            if (-not $remediationData.modules) {
+                Write-Host "[!] ERROR: Invalid remediation file format. Expected 'modules' array." -ForegroundColor Red
+                Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+                return
             }
-            catch {
-                Write-Host "    [!] Failed: $_" -ForegroundColor Red
-                $failedRemediationCount++
+            
+            $targetedChecks = @()
+            foreach ($module in $remediationData.modules) {
+                foreach ($result in $module.results) {
+                    $matchingResult = $Results | Where-Object {
+                        $_.Module -eq $module.moduleName -and
+                        $_.Category -eq $result.Category -and
+                        $_.Message -eq $result.Finding -and
+                        $_.Remediation
+                    } | Select-Object -First 1
+                    
+                    if ($matchingResult) {
+                        $targetedChecks += $matchingResult
+                    }
+                }
             }
+            
+            if ($targetedChecks.Count -eq 0) {
+                Write-Host "[!] No matching remediable issues found in remediation file." -ForegroundColor Yellow
+                Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+                return
+            }
+            
+            Write-Host "[*] Found $($targetedChecks.Count) targeted issue(s) to remediate" -ForegroundColor Cyan
+            $remediableResults = $targetedChecks
+        }
+        catch {
+            Write-Host "[!] ERROR: Failed to parse remediation file: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+            return
         }
     }
-    Write-Host "`n========================================================================================================" -ForegroundColor Yellow
+    else {
+        # Standard mode - filter by status
+        $statusesToRemediate = @()
+        if ($remediateAll) {
+            $statusesToRemediate = @("Fail", "Warning", "Info")
+            Write-Host "[*] Mode: Remediate ALL issues (Fail, Warning, Info)" -ForegroundColor Cyan
+        } else {
+            if ($remediateFail) { $statusesToRemediate += "Fail" }
+            if ($remediateWarning) { $statusesToRemediate += "Warning" }
+            if ($remediateInfo) { $statusesToRemediate += "Info" }
+            Write-Host "[*] Mode: Remediate $($statusesToRemediate -join ', ') issues only" -ForegroundColor Cyan
+        }
+        
+        $remediableResults = $Results | Where-Object { 
+            $_.Status -in $statusesToRemediate -and $_.Remediation 
+        }
+        
+        if ($remediableResults.Count -eq 0) {
+            Write-Host "`n[*] No remediable issues found for selected status types." -ForegroundColor Cyan
+            Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+            return
+        }
+        
+        Write-Host "[*] Found $($remediableResults.Count) issue(s) with remediation available" -ForegroundColor Yellow
+    }
+    
+    # AutoRemediate safety confirmation
+    if ($autoMode) {
+        Write-Host "`n+--------------------------------------------------------------------------------------------------+" -ForegroundColor Red
+        Write-Host "|                                    WARNING - AUTO-REMEDIATION                                     |" -ForegroundColor Red
+        Write-Host "+--------------------------------------------------------------------------------------------------+" -ForegroundColor Red
+        Write-Host "|                                                                                                  |" -ForegroundColor Red
+        Write-Host "| This will automatically apply $($remediableResults.Count.ToString().PadRight(3))                 |" -ForegroundColor Red
+        Write-Host "| remediation(s) WITHOUT prompting for each one.                                                   |" -ForegroundColor Red
+        Write-Host "|                                                                                                  |" -ForegroundColor Red
+        Write-Host "| RISKS:                                                                                           |" -ForegroundColor Red
+        Write-Host "| - System configuration will be modified automatically                                            |" -ForegroundColor Red
+        Write-Host "| - Changes may affect system functionality or applications                                        |" -ForegroundColor Red
+        Write-Host "| - Some changes may require system restart                                                        |" -ForegroundColor Red
+        Write-Host "| - Automated remediation may have unintended consequences                                         |" -ForegroundColor Red
+        Write-Host "|                                                                                                  |" -ForegroundColor Red
+        Write-Host "| RECOMMENDATION: Review each remediation in interactive mode first                                |" -ForegroundColor Red
+        Write-Host "|                                                                                                  |" -ForegroundColor Red
+        Write-Host "+--------------------------------------------------------------------------------------------------+" -ForegroundColor Red
+        Write-Host ""
+        
+        Write-Host "Issues to be remediated:" -ForegroundColor Yellow
+        $remediableResults | ForEach-Object {
+            Write-Host "  - [$($_.Status)] $($_.Module) - $($_.Message)" -ForegroundColor Gray
+        }
+        Write-Host ""
+        
+        # First confirmation
+        Write-Host "Do you want to proceed with AUTO-REMEDIATION? " -NoNewline -ForegroundColor Yellow
+        $firstConfirm = Read-Host "Type 'YES' to continue"
+        
+        if ($firstConfirm -ne 'YES') {
+            Write-Host "`n[*] Auto-remediation cancelled by user." -ForegroundColor Yellow
+            Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+            return
+        }
+        
+        # Second confirmation with countdown
+        Write-Host "`nFinal confirmation required. " -NoNewline -ForegroundColor Red
+        Write-Host "Type 'CONFIRM' within 10 seconds to proceed: " -NoNewline -ForegroundColor Yellow
+        
+        $secondConfirm = $null
+        $timeout = 10
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        
+        while ($timer.Elapsed.TotalSeconds -lt $timeout -and $secondConfirm -ne 'CONFIRM') {
+            if ([Console]::KeyAvailable) {
+                $secondConfirm = Read-Host
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        $timer.Stop()
+        
+        if ($secondConfirm -ne 'CONFIRM') {
+            Write-Host "`n[*] Auto-remediation cancelled (timeout or incorrect confirmation)." -ForegroundColor Yellow
+            Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+            return
+        }
+        
+        Write-Host "`n[*] AUTO-REMEDIATION CONFIRMED - Beginning automated remediation..." -ForegroundColor Green
+        Start-Sleep -Seconds 2
+    } else {
+        Write-Host "[*] Interactive mode (will prompt for each remediation)" -ForegroundColor Cyan
+    }
+    
+    Write-Host ""
+    
+    $remediatedCount = 0
+    $skippedCount = 0
+    $failedRemediationCount = 0
+    $remediationLog = @()
+    
+    foreach ($result in $remediableResults) {
+        Write-Host "[*] Issue: $($result.Message)" -ForegroundColor Cyan
+        Write-Host "    Module: $($result.Module) | Status: $($result.Status) | Category: $($result.Category)" -ForegroundColor Gray
+        Write-Host "    Remediation: $($result.Remediation)" -ForegroundColor Gray
+        
+        $shouldRemediate = $false
+        
+        if ($autoMode) {
+            $shouldRemediate = $true
+            Write-Host "    [AUTO] Applying remediation..." -ForegroundColor Yellow
+        } else {
+            $response = Read-Host "    Apply remediation? (Y/N/S=Skip remaining)"
+            if ($response -eq 'S' -or $response -eq 's') {
+                Write-Host "    [*] Skipping all remaining remediations" -ForegroundColor Yellow
+                $skippedCount += ($remediableResults.Count - $remediatedCount - $failedRemediationCount - $skippedCount)
+                break
+            }
+            $shouldRemediate = ($response -eq 'Y' -or $response -eq 'y')
+        }
+        
+        if ($shouldRemediate) {
+            try {
+                $remediationScript = [ScriptBlock]::Create($result.Remediation)
+                Invoke-Command -ScriptBlock $remediationScript -ErrorAction Stop
+                Write-Host "    [+] Remediation applied successfully" -ForegroundColor Green
+                $remediatedCount++
+                
+                $remediationLog += [PSCustomObject]@{
+                    Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    Module = $result.Module
+                    Status = $result.Status
+                    Category = $result.Category
+                    Message = $result.Message
+                    Remediation = $result.Remediation
+                    Result = "SUCCESS"
+                    Error = ""
+                }
+            }
+            catch {
+                Write-Host "    [!] Remediation failed: $($_.Exception.Message)" -ForegroundColor Red
+                $failedRemediationCount++
+                
+                $remediationLog += [PSCustomObject]@{
+                    Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    Module = $result.Module
+                    Status = $result.Status
+                    Category = $result.Category
+                    Message = $result.Message
+                    Remediation = $result.Remediation
+                    Result = "FAILED"
+                    Error = $_.Exception.Message
+                }
+            }
+        } else {
+            Write-Host "    [*] Skipped by user" -ForegroundColor Yellow
+            $skippedCount++
+        }
+        Write-Host ""
+    }
+    
+    # Save remediation log
+    if ($remediationLog.Count -gt 0) {
+        $logPath = Join-Path $script:ScriptPath "Remediation-Log-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
+        $remediationLog | ConvertTo-Json -Depth 5 | Out-File -FilePath $logPath -Encoding UTF8
+        Write-Host "[*] Remediation log saved to: $logPath" -ForegroundColor Cyan
+        Write-Host ""
+    }
+    
+    Write-Host "========================================================================================================" -ForegroundColor Yellow
     Write-Host "Remediation Summary:" -ForegroundColor Yellow
+    Write-Host "  Total issues found: $($remediableResults.Count)" -ForegroundColor White
     Write-Host "  Successfully remediated: $remediatedCount" -ForegroundColor Green
-    Write-Host "  Failed: $failedRemediationCount" -ForegroundColor Red
+    Write-Host "  Failed remediations: $failedRemediationCount" -ForegroundColor Red
+    Write-Host "  Skipped: $skippedCount" -ForegroundColor Yellow
+    
+    if ($remediatedCount -gt 0) {
+        $successRate = [math]::Round(($remediatedCount / $remediableResults.Count) * 100, 1)
+        Write-Host "  Success rate: $successRate%" -ForegroundColor Cyan
+    }
+    
     Write-Host "========================================================================================================`n" -ForegroundColor Yellow
+    
+    if ($remediatedCount -gt 0 -and -not $autoMode) {
+        Write-Host "[*] Some settings may require a system restart to take effect." -ForegroundColor Yellow
+        $restart = Read-Host "Would you like to restart now? (Y/N)"
+        if ($restart -eq 'Y' -or $restart -eq 'y') {
+            Write-Host "[*] Restarting system in 10 seconds... Press Ctrl+C to cancel" -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+            shutdown /r /t 10 /c "System restart after security remediation"
+        }
+    } elseif ($remediatedCount -gt 0 -and $autoMode) {
+        Write-Host "[*] Auto-remediation complete. Some settings may require a restart." -ForegroundColor Yellow
+    }
 }
+
 # ============================================================================
-# Output Generation
+# HTML Report Generation
 # ============================================================================
 function ConvertTo-HTMLReport {
     param([array]$AllResults, [hashtable]$ExecutionInfo)
@@ -597,8 +898,6 @@ function ConvertTo-HTMLReport {
             font-size: 0.9em;
         }
         .footer a { color: #4fc3f7; text-decoration: none; }
-        
-        /* Modal styles */
         .modal {
             display: none;
             position: fixed;
@@ -648,9 +947,7 @@ function ConvertTo-HTMLReport {
             cursor: pointer;
             color: var(--text-secondary);
         }
-        .modal-close:hover {
-            color: var(--text-primary);
-        }
+        .modal-close:hover { color: var(--text-primary); }
     </style>
 </head>
 <body>
@@ -682,6 +979,7 @@ function ConvertTo-HTMLReport {
                 <button class='export-btn secondary' onclick='showExportModal("selected")'>Export Selected</button>
             </div>
 "@
+
     $moduleGroups = $AllResults | Group-Object -Property Module
     foreach ($moduleGroup in $moduleGroups) {
         $moduleName = $moduleGroup.Name
@@ -728,8 +1026,9 @@ function ConvertTo-HTMLReport {
             if ($result.Remediation) {
                 $html += "<div class='remediation'><strong>REMEDIATION:</strong> $([System.Web.HttpUtility]::HtmlEncode($result.Remediation))</div>"
             }
-            $html += "</td></tr>"
+            $html += "</td></tr>`r`n"
         }
+        
         $html += @"
                         </tbody>
                     </table>
@@ -739,6 +1038,7 @@ function ConvertTo-HTMLReport {
             </div>
 "@
     }
+    
     $html += @"
         </div>
         <div class='footer'>
@@ -808,7 +1108,6 @@ function ConvertTo-HTMLReport {
             });
         }
         
-        // Modal functions
         function showExportModal(mode, tableId = null) {
             currentExportMode = mode;
             currentTableId = tableId;
@@ -822,8 +1121,6 @@ function ConvertTo-HTMLReport {
         }
         
         function executeExport(format) {
-            console.log('executeExport called', currentExportMode, currentTableId, format);
-            
             switch(currentExportMode) {
                 case 'all':
                     exportAll(format);
@@ -837,10 +1134,7 @@ function ConvertTo-HTMLReport {
                 case 'module-selected':
                     exportModuleSelected(currentTableId, format);
                     break;
-                default:
-                    console.warn('Unknown export mode:', currentExportMode);
             }
-            
             closeExportModal();
         }
         
@@ -848,55 +1142,50 @@ function ConvertTo-HTMLReport {
             let text = '';
             const strong = cell.querySelector('strong');
             if (strong) {
-                text += strong.textContent.trim() + '\\n\\n';
+                text += strong.textContent.trim() + '\n\n';
             }
             const details = cell.querySelector('.details');
             if (details) {
-                text += 'Details: ' + details.textContent.trim() + '\\n\\n';
+                text += 'Details: ' + details.textContent.trim() + '\n\n';
             }
             const remediation = cell.querySelector('.remediation');
             if (remediation) {
-                text += remediation.textContent.trim() + '\\n';
+                text += remediation.textContent.trim() + '\n';
             }
             return text.trim();
         }
-        // Get data from table
+        
         function getTableData(tableId, selectedOnly = false) {
             const table = document.getElementById(tableId);
             const moduleName = table.closest('.module-section').querySelector('.module-header span:first-child').textContent.replace('MODULE: ', '').trim();
             const headers = ['Status', 'Category', 'Finding'];
-    
             let rows;
             if (selectedOnly) {
                 const selected = table.querySelectorAll('tbody .row-checkbox:checked');
                 rows = Array.from(selected).map(cb => cb.closest('tr'));
-        } else {
-            rows = Array.from(table.querySelectorAll('tbody tr')).filter(row => row.style.display !== 'none');
-        }
-    
-        const data = rows.map(row => 
-            Array.from(row.cells).slice(1).map((cell, cellIndex) => {
-                if (cellIndex === 0) {
-                    return cell.querySelector('.status') ? cell.querySelector('.status').textContent.trim() : cell.textContent.trim();
-                } else if (cellIndex === 2) {
-                    return getCellText(cell);
-                } else {
-                    return cell.textContent.trim();
-                }
-            })
-        );
-    
-        return { moduleName, headers, data };
+            } else {
+                rows = Array.from(table.querySelectorAll('tbody tr')).filter(row => row.style.display !== 'none');
+            }
+            const data = rows.map(row => 
+                Array.from(row.cells).slice(1).map((cell, cellIndex) => {
+                    if (cellIndex === 0) {
+                        return cell.querySelector('.status') ? cell.querySelector('.status').textContent.trim() : cell.textContent.trim();
+                    } else if (cellIndex === 2) {
+                        return getCellText(cell);
+                    } else {
+                        return cell.textContent.trim();
+                    }
+                })
+            );
+            return { moduleName, headers, data };
         }
         
-        // Export single module
         function exportModule(tableId, format) {
             const tableData = getTableData(tableId, false);
             const filename = tableData.moduleName + '-Report';
             exportData([tableData], filename, format);
         }
         
-        // Export selected from single module
         function exportModuleSelected(tableId, format) {
             const tableData = getTableData(tableId, true);
             if (tableData.data.length === 0) {
@@ -907,47 +1196,38 @@ function ConvertTo-HTMLReport {
             exportData([tableData], filename, format);
         }
         
-        // Export all modules
         function exportAll(format) {
             const tables = document.querySelectorAll('.module-content table');
             const allModuleData = [];
-            
             tables.forEach(table => {
                 const tableData = getTableData(table.id, false);
                 if (tableData.data.length > 0) {
                     allModuleData.push(tableData);
                 }
             });
-            
             if (allModuleData.length === 0) {
                 alert('No data to export');
                 return;
             }
-            
             exportData(allModuleData, 'Full-Security-Audit-Report', format);
         }
         
-        // Export selected from all modules
         function exportSelected(format) {
             const tables = document.querySelectorAll('.module-content table');
             const allModuleData = [];
-            
             tables.forEach(table => {
                 const tableData = getTableData(table.id, true);
                 if (tableData.data.length > 0) {
                     allModuleData.push(tableData);
                 }
             });
-            
             if (allModuleData.length === 0) {
                 alert('No rows selected');
                 return;
             }
-            
             exportData(allModuleData, 'Selected-Security-Audit-Report', format);
         }
         
-        // Main export function
         function exportData(moduleDataArray, filename, format) {
             switch(format) {
                 case 'csv':
@@ -968,49 +1248,38 @@ function ConvertTo-HTMLReport {
             }
         }
         
-        // CSV Export - separate section per module
         function exportToCSV(moduleDataArray, filename) {
             let csv = '';
-            
             moduleDataArray.forEach((moduleData, index) => {
                 if (index > 0) csv += '\r\n\r\n';
-        
                 csv += '=== ' + moduleData.moduleName + ' ===\r\n';
                 csv += moduleData.headers.map(h => '"' + h.replace(/"/g, '""') + '"').join(',') + '\r\n';
-        
                 moduleData.data.forEach(row => {
                     csv += row.map(cell => '"' + cell.replace(/"/g, '""').replace(/\r?\n/g, '\r\n') + '"').join(',') + '\r\n';
                 });
             });
-            
             downloadFile(csv, filename, 'text/csv;charset=utf-8;');
         }
         
-        // Excel Export - separate sheet per module
         function exportToExcel(moduleDataArray, filename) {
             let html = '<html>\n<head><meta charset="utf-8"></head>\n<body>\n';
-    
             moduleDataArray.forEach((moduleData, index) => {
                 html += '<table>\n';
                 html += '<tr><td colspan="' + moduleData.headers.length + '" style="font-weight:bold;font-size:14pt;background:#667eea;color:white;padding:10px;">' + escapeHtml(moduleData.moduleName) + '</td></tr>\n';
                 html += '<tr>' + moduleData.headers.map(h => '<th style="background:#667eea;color:white;font-weight:bold;padding:8px;">' + escapeHtml(h) + '</th>').join('') + '</tr>\n';
-        
-            moduleData.data.forEach(row => {
-                html += '<tr>' + row.map(cell => '<td style="padding:5px;border:1px solid #ddd; white-space:pre-wrap;">' + escapeHtml(cell).replace(/\n/g, '<br />') + '</td>').join('') + '</tr>\n';
+                moduleData.data.forEach(row => {
+                    html += '<tr>' + row.map(cell => '<td style="padding:5px;border:1px solid #ddd; white-space:pre-wrap;">' + escapeHtml(cell).replace(/\n/g, '<br />') + '</td>').join('') + '</tr>\n';
+                });
+                html += '</table>\n';
+                if (index < moduleDataArray.length - 1) {
+                    html += '<br><br>\n';
+                }
             });
+            html += '</body>\n</html>';
+            html = html.replace(/\n/g, '\r\n');
+            downloadFile(html, filename + '.xls', 'application/vnd.ms-excel');
+        }
         
-            html += '</table>\n';
-            if (index < moduleDataArray.length - 1) {
-                html += '<br><br>\n';
-            }
-        });
-    
-        html += '</body>\n</html>';
-        html = html.replace(/\n/g, '\r\n');
-        downloadFile(html, filename + '.xls', 'application/vnd.ms-excel');
-    }
-        
-        // JSON Export
         function exportToJSON(moduleDataArray, filename) {
             const jsonData = {
                 exportDate: new Date().toISOString(),
@@ -1026,64 +1295,62 @@ function ConvertTo-HTMLReport {
                     })
                 }))
             };
-            
             const jsonString = JSON.stringify(jsonData, null, 2);
             downloadFile(jsonString, filename, 'application/json');
         }
         
-        // XML Export
         function exportToXML(moduleDataArray, filename) {
-            let xml = '<?xml version="1.0" encoding="UTF-8"?><events>\r\n';
-    
+            let xml = '<?xml version="1.0" encoding="UTF-8"?>\r\n';
+            xml += '<security_audit>\r\n';
+            xml += '  <metadata>\r\n';
+            xml += '    <export_date>' + new Date().toISOString() + '</export_date>\r\n';
+            xml += '    <total_modules>' + moduleDataArray.length + '</total_modules>\r\n';
+            xml += '    <total_checks>' + moduleDataArray.reduce((sum, m) => sum + m.data.length, 0) + '</total_checks>\r\n';
+            xml += '  </metadata>\r\n';
+            xml += '  <events>\r\n';
             moduleDataArray.forEach(moduleData => {
                 moduleData.data.forEach(row => {
-                    xml += '  <event>\r\n';
-                    xml += '    <module>' + escapeXml(moduleData.moduleName) + '</module>\r\n';
+                    xml += '    <event>\r\n';
+                    xml += '      <timestamp>' + new Date().toISOString() + '</timestamp>\r\n';
+                    xml += '      <module>' + escapeXml(moduleData.moduleName) + '</module>\r\n';
                     moduleData.headers.forEach((header, i) => {
-                        const tagName = header.replace(/\s+/g, '').toLowerCase();
-                        xml += '    <' + tagName + '>' + escapeXml(row[i]).replace(/\r?\n/g, '&#10;') + '</' + tagName + '>\r\n';
+                        const tagName = header.replace(/\s+/g, '_').toLowerCase();
+                        const value = escapeXml(row[i] || '').replace(/\r?\n/g, '&#10;');
+                        xml += '      <' + tagName + '>' + value + '</' + tagName + '>\r\n';
                     });
-                    xml += '  </event>\r\n';
+                    xml += '    </event>\r\n';
                 });
             });
-    
-            xml += '</events>';
-    
-            downloadFile(xml, filename + '.xml', 'application/xml');
+            xml += '  </events>\r\n';
+            xml += '</security_audit>';
+            const finalFilename = filename.endsWith('.xml') ? filename : filename + '.xml';
+            downloadFile(xml, finalFilename, 'application/xml');
         }
         
-        // TXT Export
         function exportToTXT(moduleDataArray, filename) {
             let txt = 'WINDOWS SECURITY AUDIT REPORT\r\n';
             txt += '================================\r\n';
             txt += 'Export Date: ' + new Date().toLocaleString() + '\r\n\r\n';
-            
             moduleDataArray.forEach((moduleData, index) => {
                 if (index > 0) txt += '\r\n\r\n';
-                
                 txt += '='.repeat(60) + '\r\n';
                 txt += 'MODULE: ' + moduleData.moduleName + '\r\n';
                 txt += '='.repeat(60) + '\r\n\r\n';
-                
                 const colWidths = moduleData.headers.map((h, i) => {
                     const processedData = moduleData.data.map(row => row[i].replace(/\r?\n/g, ' | ').length);
                     const maxDataWidth = Math.max(...processedData);
                     return Math.max(h.length, maxDataWidth, 10);
                 });
-                
                 txt += moduleData.headers.map((h, i) => h.padEnd(colWidths[i])).join(' | ') + '\r\n';
                 txt += colWidths.map(w => '-'.repeat(w)).join('-+-') + '\r\n';
-                
                 moduleData.data.forEach(row => {
                     const processedRow = row.map(cell => cell.replace(/\r?\n/g, ' | '));
                     txt += processedRow.map((cell, i) => cell.padEnd(colWidths[i])).join(' | ') + '\r\n';
                 });
             });
-            
             downloadFile(txt, filename, 'text/plain');
         }
         
-        // Utility functions
         function downloadFile(content, filename, mimeType) {
             const element = document.createElement('a');
             element.setAttribute('href', 'data:' + mimeType + ';charset=utf-8,' + encodeURIComponent(content));
@@ -1109,7 +1376,6 @@ function ConvertTo-HTMLReport {
                 .replace(/'/g, '&apos;');
         }
         
-        // Close modal when clicking outside
         window.onclick = function(event) {
             const modal = document.getElementById('exportModal');
             if (event.target === modal) {
@@ -1120,16 +1386,74 @@ function ConvertTo-HTMLReport {
 </body>
 </html>
 "@
+    
     return $html
 }
 
+# ============================================================================
+# XML Export Function
+# ============================================================================
+function Export-XMLResults {
+    param([array]$AllResults, [hashtable]$ExecutionInfo)
+    
+    $xml = New-Object System.Text.StringBuilder
+    [void]$xml.AppendLine('<?xml version="1.0" encoding="UTF-8"?>')
+    [void]$xml.AppendLine('<security_audit>')
+    
+    [void]$xml.AppendLine('  <metadata>')
+    [void]$xml.AppendLine("    <export_date>$([DateTime]::UtcNow.ToString('o'))</export_date>")
+    [void]$xml.AppendLine("    <computer_name>$([System.Security.SecurityElement]::Escape($ExecutionInfo.ComputerName))</computer_name>")
+    [void]$xml.AppendLine("    <operating_system>$([System.Security.SecurityElement]::Escape($ExecutionInfo.OSVersion))</operating_system>")
+    [void]$xml.AppendLine("    <scan_date>$([System.Security.SecurityElement]::Escape($ExecutionInfo.ScanDate))</scan_date>")
+    [void]$xml.AppendLine("    <duration>$([System.Security.SecurityElement]::Escape($ExecutionInfo.Duration))</duration>")
+    [void]$xml.AppendLine("    <total_checks>$($ExecutionInfo.TotalChecks)</total_checks>")
+    [void]$xml.AppendLine("    <pass_count>$($ExecutionInfo.PassCount)</pass_count>")
+    [void]$xml.AppendLine("    <fail_count>$($ExecutionInfo.FailCount)</fail_count>")
+    [void]$xml.AppendLine("    <warning_count>$($ExecutionInfo.WarningCount)</warning_count>")
+    [void]$xml.AppendLine("    <info_count>$($ExecutionInfo.InfoCount)</info_count>")
+    [void]$xml.AppendLine("    <error_count>$($ExecutionInfo.ErrorCount)</error_count>")
+    [void]$xml.AppendLine('  </metadata>')
+    
+    [void]$xml.AppendLine('  <events>')
+    foreach ($result in $AllResults) {
+        [void]$xml.AppendLine('    <event>')
+        [void]$xml.AppendLine("      <timestamp>$([DateTime]::UtcNow.ToString('o'))</timestamp>")
+        [void]$xml.AppendLine("      <module>$([System.Security.SecurityElement]::Escape($result.Module))</module>")
+        [void]$xml.AppendLine("      <status>$([System.Security.SecurityElement]::Escape($result.Status))</status>")
+        [void]$xml.AppendLine("      <category>$([System.Security.SecurityElement]::Escape($result.Category))</category>")
+        [void]$xml.AppendLine("      <message>$([System.Security.SecurityElement]::Escape($result.Message))</message>")
+        if ($result.Details) {
+            [void]$xml.AppendLine("      <details>$([System.Security.SecurityElement]::Escape($result.Details))</details>")
+        }
+        if ($result.Remediation) {
+            [void]$xml.AppendLine("      <remediation>$([System.Security.SecurityElement]::Escape($result.Remediation))</remediation>")
+        }
+        [void]$xml.AppendLine('    </event>')
+    }
+    [void]$xml.AppendLine('  </events>')
+    [void]$xml.AppendLine('</security_audit>')
+    
+    return $xml.ToString()
+}
+
+# ============================================================================
+# Main Export Function
+# ============================================================================
 function Export-Results {
     param([array]$AllResults, [hashtable]$ExecutionInfo, [string]$Format, [string]$Path)
+    
     if ([string]::IsNullOrEmpty($Path)) {
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $extension = switch ($Format) { "HTML" { "html" } "CSV" { "csv" } "JSON" { "json" } default { "txt" } }
+        $extension = switch ($Format) {
+            "HTML" { "html" }
+            "CSV" { "csv" }
+            "JSON" { "json" }
+            "XML" { "xml" }
+            default { "txt" }
+        }
         $Path = Join-Path $script:ScriptPath "Security-Audit-Report-$timestamp.$extension"
     }
+    
     switch ($Format) {
         "HTML" {
             $htmlContent = ConvertTo-HTMLReport -AllResults $AllResults -ExecutionInfo $ExecutionInfo
@@ -1144,8 +1468,16 @@ function Export-Results {
             @{ ExecutionInfo = $ExecutionInfo; Results = $AllResults } | ConvertTo-Json -Depth 10 | Out-File -FilePath $Path -Encoding UTF8
             Write-Host "`n[+] JSON report saved to: $Path" -ForegroundColor Green
         }
-        "Console" { Write-Host "`n[+] Console output complete" -ForegroundColor Green }
+        "XML" {
+            $xmlContent = Export-XMLResults -AllResults $AllResults -ExecutionInfo $ExecutionInfo
+            $xmlContent | Out-File -FilePath $Path -Encoding UTF8
+            Write-Host "`n[+] XML report saved to: $Path" -ForegroundColor Green
+        }
+        "Console" {
+            Write-Host "`n[+] Console output complete" -ForegroundColor Green
+        }
     }
+    
     return $Path
 }
 
@@ -1154,21 +1486,35 @@ function Export-Results {
 # ============================================================================
 function Start-SecurityAudit {
     $startTime = Get-Date
+    
     Show-Banner
+    
     if (-not (Test-Prerequisites)) { return }
-    $modulesToRun = if ($Modules -contains "All") { @("Core", "CIS", "MS", "NIST", "STIG", "NSA", "CISA") } else { $Modules }
+    
+    $modulesToRun = if ($Modules -contains "All") {
+        @("Core", "CIS", "MS", "NIST", "STIG", "NSA", "CISA")
+    } else {
+        $Modules
+    }
+    
     Write-Host "`n[*] Modules to execute: $($modulesToRun -join ', ')" -ForegroundColor Cyan
+    
     $missingModules = @()
     foreach ($module in $modulesToRun) {
-        if (-not (Test-ModuleExists -ModuleName $module)) { $missingModules += $module }
+        if (-not (Test-ModuleExists -ModuleName $module)) {
+            $missingModules += $module
+        }
     }
-	
-	# Verify all modules exist
+    
     if ($missingModules.Count -gt 0) {
         Write-Host "`n[!] WARNING: Missing modules: $($missingModules -join ', ')" -ForegroundColor Yellow
         $modulesToRun = $modulesToRun | Where-Object { $_ -notin $missingModules }
-        if ($modulesToRun.Count -eq 0) { Write-Host "[!] No modules available" -ForegroundColor Red; return }
+        if ($modulesToRun.Count -eq 0) {
+            Write-Host "[!] No modules available" -ForegroundColor Red
+            return
+        }
     }
+    
     $sharedData = @{
         ComputerName = $env:COMPUTERNAME
         OSVersion = (Get-CimInstance -ClassName Win32_OperatingSystem).Caption
@@ -1177,8 +1523,10 @@ function Start-SecurityAudit {
         ScriptPath = $script:ScriptPath
         RemediateIssues = $RemediateIssues.IsPresent
     }
+    
     $allResults = @()
     $successfulModules = @()
+    
     foreach ($module in $modulesToRun) {
         try {
             $moduleResults = Invoke-SecurityModule -ModuleName $module -SharedData $sharedData
@@ -1187,13 +1535,19 @@ function Start-SecurityAudit {
                 $successfulModules += $module
             }
         }
-        catch { Write-Host "[!] Failed to execute module ${module}: $_" -ForegroundColor Red }
+        catch {
+            Write-Host "[!] Failed to execute module ${module}: $_" -ForegroundColor Red
+        }
     }
-    if ($allResults.Count -eq 0) { Write-Host "`n[!] No results generated" -ForegroundColor Red; return }
+    
+    if ($allResults.Count -eq 0) {
+        Write-Host "`n[!] No results generated" -ForegroundColor Red
+        return
+    }
+    
     $endTime = Get-Date
     $duration = $endTime - $startTime
-	
-	# Calculate accurate statistics using validated results
+    
     $executionInfo = @{
         ComputerName = $sharedData.ComputerName
         OSVersion = $sharedData.OSVersion
@@ -1207,8 +1561,7 @@ function Start-SecurityAudit {
         InfoCount = ($allResults | Where-Object { $_.Status -eq "Info" }).Count
         ErrorCount = ($allResults | Where-Object { $_.Status -eq "Error" }).Count
     }
-	
-	# Display summary with validation statistics
+    
     Write-Host "`n========================================================================================================" -ForegroundColor Cyan
     Write-Host "                                    AUDIT SUMMARY" -ForegroundColor Cyan
     Write-Host "========================================================================================================" -ForegroundColor Cyan
@@ -1219,11 +1572,17 @@ function Start-SecurityAudit {
     Write-Host "Info:            $($executionInfo.InfoCount)" -ForegroundColor Cyan
     Write-Host "Errors:          $($executionInfo.ErrorCount)" -ForegroundColor Magenta
     Write-Host "Duration:        $($executionInfo.Duration)" -ForegroundColor White
+    
     if ($script:StatisticsLog.NormalizedResults -gt 0) {
         Write-Host "`nValidation: $($script:StatisticsLog.NormalizedResults) results normalized" -ForegroundColor Yellow
     }
+    
     Write-Host "========================================================================================================`n" -ForegroundColor Cyan
-    if ($RemediateIssues) { Invoke-Remediation -Results $allResults }
+    
+    if ($RemediateIssues -or $RemediateIssues_Fail -or $RemediateIssues_Warning -or $RemediateIssues_Info) {
+        Invoke-Remediation -Results $allResults
+    }
+    
     if ($OutputFormat -ne "Console") {
         $outputPath = Export-Results -AllResults $allResults -ExecutionInfo $executionInfo -Format $OutputFormat -Path $OutputPath
         if ($OutputFormat -eq "HTML" -and (Test-Path $outputPath)) {
@@ -1231,6 +1590,7 @@ function Start-SecurityAudit {
             Start-Process $outputPath
         }
     }
+    
     Write-Host "`n[+] Audit completed successfully!" -ForegroundColor Green
     Write-Host "[*] GitHub: https://github.com/Sandler73/Windows-Security-Audit-Script" -ForegroundColor Cyan
 }
@@ -1238,8 +1598,8 @@ function Start-SecurityAudit {
 # ============================================================================
 # Script Entry Point
 # ============================================================================
-try { 
-	Start-SecurityAudit 
+try {
+    Start-SecurityAudit
 }
 catch {
     Write-Host "`n[!] Fatal error: $($_.Exception.Message)" -ForegroundColor Red
