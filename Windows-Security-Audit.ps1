@@ -1,6 +1,6 @@
 # Windows-Security-Audit-Script.ps1
 # Comprehensive Windows Security Audit Script
-# Version: 6.0
+# Version: 6.1
 # GitHub: https://github.com/Sandler73/Windows-Security-Audit-Script
 
 <#
@@ -1555,11 +1555,11 @@ function Start-SecurityAudit {
         Duration = "{0:hh\:mm\:ss}" -f $duration
         ModulesRun = $successfulModules
         TotalChecks = $allResults.Count
-        PassCount = ($allResults | Where-Object { $_.Status -eq "Pass" }).Count
-        FailCount = ($allResults | Where-Object { $_.Status -eq "Fail" }).Count
-        WarningCount = ($allResults | Where-Object { $_.Status -eq "Warning" }).Count
-        InfoCount = ($allResults | Where-Object { $_.Status -eq "Info" }).Count
-        ErrorCount = ($allResults | Where-Object { $_.Status -eq "Error" }).Count
+        PassCount = @($allResults | Where-Object { $_.Status -eq "Pass" }).Count
+        FailCount = @($allResults | Where-Object { $_.Status -eq "Fail" }).Count
+        WarningCount = @($allResults | Where-Object { $_.Status -eq "Warning" }).Count
+        InfoCount = @($allResults | Where-Object { $_.Status -eq "Info" }).Count
+        ErrorCount = @($allResults | Where-Object { $_.Status -eq "Error" }).Count
     }
     
     Write-Host "`n========================================================================================================" -ForegroundColor Cyan
