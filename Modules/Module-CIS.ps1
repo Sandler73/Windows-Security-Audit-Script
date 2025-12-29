@@ -640,14 +640,14 @@ foreach ($logConfig in $eventLogs) {
 # ============================================================================
 Write-Host "[CIS] Checking Windows Firewall with Advanced Security..." -ForegroundColor Yellow
 
-$profiles = @("Domain", "Private", "Public")
+$CISprofiles = @("Domain", "Private", "Public")
 
-foreach ($profileName in $profiles) {
+foreach ($profileName in $CISprofiles) {
     try {
-        $profile = Get-NetFirewallProfile -Name $profileName -ErrorAction Stop
+        $CISprofile = Get-NetFirewallProfile -Name $profileName -ErrorAction Stop
         
         # Check if firewall is enabled
-        if ($profile.Enabled) {
+        if ($CISprofile.Enabled) {
             Add-Result -Category "CIS - Firewall" -Status "Pass" `
                 -Message "$profileName Profile: Firewall is enabled" `
                 -Details "CIS Benchmark: Windows Firewall provides essential network protection"
@@ -659,7 +659,7 @@ foreach ($profileName in $profiles) {
         }
         
         # Check default inbound action
-        if ($profile.DefaultInboundAction -eq "Block") {
+        if ($CISprofile.DefaultInboundAction -eq "Block") {
             Add-Result -Category "CIS - Firewall" -Status "Pass" `
                 -Message "$profileName Profile: Default inbound action is Block" `
                 -Details "CIS Benchmark: Default deny for inbound reduces attack surface"
@@ -671,7 +671,7 @@ foreach ($profileName in $profiles) {
         }
         
         # Check default outbound action
-        if ($profile.DefaultOutboundAction -eq "Allow") {
+        if ($CISprofile.DefaultOutboundAction -eq "Allow") {
             Add-Result -Category "CIS - Firewall" -Status "Pass" `
                 -Message "$profileName Profile: Default outbound action is Allow" `
                 -Details "CIS Benchmark: Allow outbound by default is acceptable"
@@ -682,7 +682,7 @@ foreach ($profileName in $profiles) {
         }
         
         # Check logging
-        if ($profile.LogBlocked -eq "True") {
+        if ($CISprofile.LogBlocked -eq "True") {
             Add-Result -Category "CIS - Firewall" -Status "Pass" `
                 -Message "$profileName Profile: Logging blocked connections" `
                 -Details "CIS Benchmark: Firewall logging aids security monitoring"
@@ -693,7 +693,7 @@ foreach ($profileName in $profiles) {
                 -Remediation "Set-NetFirewallProfile -Name $profileName -LogBlocked True"
         }
         
-        if ($profile.LogAllowed -eq "True") {
+        if ($CISprofile.LogAllowed -eq "True") {
             Add-Result -Category "CIS - Firewall" -Status "Pass" `
                 -Message "$profileName Profile: Logging allowed connections" `
                 -Details "CIS Benchmark: Comprehensive logging enabled"
@@ -704,7 +704,7 @@ foreach ($profileName in $profiles) {
         }
         
         # Check log file size
-        $logMaxSize = $profile.LogMaxSizeKilobytes
+        $logMaxSize = $CISprofile.LogMaxSizeKilobytes
         if ($logMaxSize -ge 16384) {  # 16 MB
             Add-Result -Category "CIS - Firewall" -Status "Pass" `
                 -Message "$profileName Profile: Log file max size is $logMaxSize KB" `
@@ -718,7 +718,7 @@ foreach ($profileName in $profiles) {
         
         # Check if notifications are disabled (CIS recommends No for Domain, Yes for others)
         if ($profileName -eq "Domain") {
-            if ($profile.NotifyOnListen -eq "False") {
+            if ($CISprofile.NotifyOnListen -eq "False") {
                 Add-Result -Category "CIS - Firewall" -Status "Pass" `
                     -Message "$profileName Profile: User notifications are disabled" `
                     -Details "CIS Benchmark: Prevents user interaction on domain profile"
@@ -729,7 +729,7 @@ foreach ($profileName in $profiles) {
                     -Remediation "Set-NetFirewallProfile -Name $profileName -NotifyOnListen False"
             }
         } else {
-            if ($profile.NotifyOnListen -eq "True") {
+            if ($CISprofile.NotifyOnListen -eq "True") {
                 Add-Result -Category "CIS - Firewall" -Status "Pass" `
                     -Message "$profileName Profile: User notifications are enabled" `
                     -Details "CIS Benchmark: Users are notified when apps request firewall exceptions"
@@ -1283,11 +1283,11 @@ try {
 # ============================================================================
 # Summary Statistics
 # ============================================================================
-$passCount = ($results | Where-Object { $_.Status -eq "Pass" }).Count
-$failCount = ($results | Where-Object { $_.Status -eq "Fail" }).Count
-$warningCount = ($results | Where-Object { $_.Status -eq "Warning" }).Count
-$infoCount = ($results | Where-Object { $_.Status -eq "Info" }).Count
-$errorCount = ($results | Where-Object { $_.Status -eq "Error" }).Count
+$passCount = @($results | Where-Object { $_.Status -eq "Pass" }).Count
+$failCount = @($results | Where-Object { $_.Status -eq "Fail" }).Count
+$warningCount = @($results | Where-Object { $_.Status -eq "Warning" }).Count
+$infoCount = @($results | Where-Object { $_.Status -eq "Info" }).Count
+$errorCount = @($results | Where-Object { $_.Status -eq "Error" }).Count
 $totalChecks = $results.Count
 
 Write-Host "`n[CIS] Module completed:" -ForegroundColor Cyan
