@@ -1,6 +1,6 @@
 # Module-CISA.ps1
 # CISA Cybersecurity Performance Goals Compliance Module
-# Version: 5.0
+# Version: 6.0
 # Based on CISA's Cybersecurity Performance Goals and Critical Security Controls
 
 <#
@@ -800,16 +800,16 @@ Write-Host "[CISA] Checking Network Security..." -ForegroundColor Yellow
 
 # Check Windows Firewall status
 try {
-    $profiles = @("Domain", "Private", "Public")
+    $CISAprofiles = @("Domain", "Private", "Public")
     $allEnabled = $true
     
-    foreach ($profileName in $profiles) {
-        $profile = Get-NetFirewallProfile -Name $profileName -ErrorAction Stop
+    foreach ($profileName in $CISAprofiles) {
+        $CISAprofile = Get-NetFirewallProfile -Name $profileName -ErrorAction Stop
         
-        if ($profile.Enabled) {
+        if ($CISAprofile.Enabled) {
             Add-Result -Category "CISA - Network Security" -Status "Pass" `
                 -Message "$profileName firewall profile is enabled" `
-                -Details "CISA CPG: Firewall provides first line of network defense (Default Inbound: $($profile.DefaultInboundAction), Outbound: $($profile.DefaultOutboundAction))"
+                -Details "CISA CPG: Firewall provides first line of network defense (Default Inbound: $($CISAprofile.DefaultInboundAction), Outbound: $($CISAprofile.DefaultOutboundAction))"
         } else {
             $allEnabled = $false
             Add-Result -Category "CISA - Network Security" -Status "Fail" `
@@ -819,7 +819,7 @@ try {
         }
         
         # Check if default deny for inbound is configured
-        if ($profile.DefaultInboundAction -eq "Block") {
+        if ($CISAprofile.DefaultInboundAction -eq "Block") {
             Add-Result -Category "CISA - Network Security" -Status "Pass" `
                 -Message "$profileName profile: Default inbound is set to Block" `
                 -Details "CISA CPG: Default deny reduces attack surface"
@@ -831,7 +831,7 @@ try {
         }
         
         # Check logging
-        if ($profile.LogBlocked -eq "True") {
+        if ($CISAprofile.LogBlocked -eq "True") {
             Add-Result -Category "CISA - Network Security" -Status "Pass" `
                 -Message "$profileName profile: Logging blocked connections" `
                 -Details "CISA CPG: Firewall logging aids security monitoring"
@@ -1405,11 +1405,11 @@ try {
 # ============================================================================
 # Summary Statistics
 # ============================================================================
-$passCount = ($results | Where-Object { $_.Status -eq "Pass" }).Count
-$failCount = ($results | Where-Object { $_.Status -eq "Fail" }).Count
-$warningCount = ($results | Where-Object { $_.Status -eq "Warning" }).Count
-$infoCount = ($results | Where-Object { $_.Status -eq "Info" }).Count
-$errorCount = ($results | Where-Object { $_.Status -eq "Error" }).Count
+$passCount = @($results | Where-Object { $_.Status -eq "Pass" }).Count
+$failCount = @($results | Where-Object { $_.Status -eq "Fail" }).Count
+$warningCount = @($results | Where-Object { $_.Status -eq "Warning" }).Count
+$infoCount = @($results | Where-Object { $_.Status -eq "Info" }).Count
+$errorCount = @($results | Where-Object { $_.Status -eq "Error" }).Count
 $totalChecks = $results.Count
 
 Write-Host "`n[CISA] Module completed:" -ForegroundColor Cyan
