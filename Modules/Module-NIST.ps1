@@ -414,9 +414,9 @@ try {
     $allEnabled = $true
     
     foreach ($profileName in $firewallProfiles) {
-        $profile = Get-NetFirewallProfile -Name $profileName -ErrorAction SilentlyContinue
+        $NISTprofile = Get-NetFirewallProfile -Name $profileName -ErrorAction SilentlyContinue
         
-        if (-not $profile.Enabled) {
+        if (-not $NISTprofile.Enabled) {
             $allEnabled = $false
             break
         }
@@ -862,11 +862,11 @@ try {
 # ============================================================================
 # Summary Statistics
 # ============================================================================
-$passCount = ($results | Where-Object { $_.Status -eq "Pass" }).Count
-$failCount = ($results | Where-Object { $_.Status -eq "Fail" }).Count
-$warningCount = ($results | Where-Object { $_.Status -eq "Warning" }).Count
-$infoCount = ($results | Where-Object { $_.Status -eq "Info" }).Count
-$errorCount = ($results | Where-Object { $_.Status -eq "Error" }).Count
+$passCount = @($results | Where-Object { $_.Status -eq "Pass" }).Count
+$failCount = @($results | Where-Object { $_.Status -eq "Fail" }).Count
+$warningCount = @($results | Where-Object { $_.Status -eq "Warning" }).Count
+$infoCount = @($results | Where-Object { $_.Status -eq "Info" }).Count
+$errorCount = @($results | Where-Object { $_.Status -eq "Error" }).Count
 $totalChecks = $results.Count
 
 Write-Host "`n[NIST] Module completed:" -ForegroundColor Cyan
