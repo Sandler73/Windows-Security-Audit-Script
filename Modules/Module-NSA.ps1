@@ -1,7 +1,7 @@
 # Module-NSA.ps1
 # NSA Windows Security Guidance Compliance Module
 # Version: 5.0
-# Based on NSA Cybersecurity Information Sheets and Guidance
+# Based on NSA Cybersecurity Information Sheets and guidance
 
 <#
 .SYNOPSIS
@@ -550,18 +550,18 @@ Write-Host "[NSA] Checking Network Hardening..." -ForegroundColor Yellow
 
 # Check Windows Firewall
 try {
-    $profiles = @("Domain", "Private", "Public")
-    foreach ($profile in $profiles) {
-        $fwProfile = Get-NetFirewallProfile -Name $profile
+    $NSAprofiles = @("Domain", "Private", "Public")
+    foreach ($NSAprofile in $NSAprofiles) {
+        $fwProfile = Get-NetFirewallProfile -Name $NSAprofile
         if ($fwProfile.Enabled) {
             Add-Result -Category "NSA - Network Hardening" -Status "Pass" `
-                -Message "${profile} firewall profile is enabled" `
+                -Message "${NSAprofile} firewall profile is enabled" `
                 -Details "NSA Guidance: Enable Windows Firewall on all profiles"
         } else {
             Add-Result -Category "NSA - Network Hardening" -Status "Fail" `
-                -Message "${profile} firewall profile is disabled" `
+                -Message "${NSAprofile} firewall profile is disabled" `
                 -Details "NSA Guidance: Enable firewall protection" `
-                -Remediation "Set-NetFirewallProfile -Name $profile -Enabled True"
+                -Remediation "Set-NetFirewallProfile -Name $NSAprofile -Enabled True"
         }
     }
 } catch {
@@ -617,11 +617,11 @@ try {
 # ============================================================================
 # Summary Statistics
 # ============================================================================
-$passCount = ($results | Where-Object { $_.Status -eq "Pass" }).Count
-$failCount = ($results | Where-Object { $_.Status -eq "Fail" }).Count
-$warningCount = ($results | Where-Object { $_.Status -eq "Warning" }).Count
-$infoCount = ($results | Where-Object { $_.Status -eq "Info" }).Count
-$errorCount = ($results | Where-Object { $_.Status -eq "Error" }).Count
+$passCount = @($results | Where-Object { $_.Status -eq "Pass" }).Count
+$failCount = @($results | Where-Object { $_.Status -eq "Fail" }).Count
+$warningCount = @($results | Where-Object { $_.Status -eq "Warning" }).Count
+$infoCount = @($results | Where-Object { $_.Status -eq "Info" }).Count
+$errorCount = @($results | Where-Object { $_.Status -eq "Error" }).Count
 $totalChecks = $results.Count
 
 Write-Host "`n[NSA] Module completed:" -ForegroundColor Cyan
