@@ -11,11 +11,13 @@
     This script audits Windows systems against multiple security frameworks including:
     - Core Security (baseline checks)
     - CIS Benchmarks
-    - Microsoft Security Baseline
-    - NIST Cybersecurity Framework
-    - DISA STIGs
-    - NSA Cybersecurity Guidance
     - CISA Best Practices
+    - DISA STIGs
+	- Microsoft Security Baseline
+	- Microsoft Defender for Endpoint/EDR advanced configuration checks
+    - NIST Cybersecurity Framework
+    - NSA Cybersecurity Guidance
+
 
 .PARAMETER Modules
     Comma-separated list of modules to run. Available: Core,CIS,MS,NIST,STIG,NSA,CISA,All
@@ -80,7 +82,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [ValidateSet("Core","CIS","MS","NIST","STIG","NSA","CISA","All")]
+    [ValidateSet("Core","CIS","MS","NIST","STIG","NSA","CISA","MS-DefenderATP","All")]
     [string[]]$Modules = @("All"),
     
     [Parameter(Mandatory=$false)]
@@ -137,11 +139,12 @@ function Show-Banner {
     Write-Host "`nSupported Frameworks:" -ForegroundColor White
     Write-Host "  - Core Security Baseline" -ForegroundColor Gray
     Write-Host "  - CIS Benchmarks" -ForegroundColor Gray
-    Write-Host "  - Microsoft Security Baseline" -ForegroundColor Gray
-    Write-Host "  - NIST Cybersecurity Framework" -ForegroundColor Gray
-    Write-Host "  - DISA STIGs" -ForegroundColor Gray
-    Write-Host "  - NSA Cybersecurity Guidance" -ForegroundColor Gray
     Write-Host "  - CISA Best Practices" -ForegroundColor Gray
+	Write-Host "  - DISA STIGs" -ForegroundColor Gray
+    Write-Host "  - Microsoft Security Baseline" -ForegroundColor Gray
+    Write-Host "  - Microsoft Defender for Endpoint/EDR" -ForegroundColor Gray
+	Write-Host "  - NIST Cybersecurity Framework" -ForegroundColor Gray
+    Write-Host "  - NSA Cybersecurity Guidance" -ForegroundColor Gray
     Write-Host "`n========================================================================================================`n" -ForegroundColor Cyan
 }
 
@@ -318,6 +321,7 @@ function Get-AvailableModules {
         "STIG" = "Modules\Module-STIG.ps1"
         "NSA" = "Modules\Module-NSA.ps1"
         "CISA" = "Modules\Module-CISA.ps1"
+		"MS-DefenderATP" = "Modules\Module-MS-DefenderATP.ps1"
     }
 }
 
