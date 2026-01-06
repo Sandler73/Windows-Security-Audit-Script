@@ -144,7 +144,7 @@ Version 4.x and earlier used a monolithic script design. Version 5.0 represents 
 
 ## How to Contribute
 
-See [CONTRIBUTING.md](https://github.com/Sandler73/Windows-Security-Audit-Script/blob/main/CONTRIBUTING.md) for guidelines on:
+See [CONTRIBUTING.md](https://github.com/Sandler73/Windows-Security-Audit-Project/blob/main/CONTRIBUTING.md) for guidelines on:
 - Reporting bugs
 - Suggesting features
 - Submitting pull requests
@@ -207,18 +207,18 @@ This project builds upon the work of:
 - **Microsoft** - Security baselines and tools
 - **Open-source community** - PowerShell modules and tools
 
-See [Framework Reference](https://github.com/Sandler73/Windows-Security-Audit-Script/wiki/Framework-Reference) for detailed citations.
+See [Framework Reference](https://github.com/Sandler73/Windows-Security-Audit-Project/wiki/Framework-Reference) for detailed citations.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](https://github.com/Sandler73/Windows-Security-Audit-Script/blob/main/LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/Sandler73/Windows-Security-Audit-Project/blob/main/LICENSE) file for details.
 
 ## Links
 
-- **Repository**: https://github.com/Sandler73/Windows-Security-Audit-Script
-- **Documentation**: https://github.com/Sandler73/Windows-Security-Audit-Script/wiki
-- **Issues**: https://github.com/Sandler73/Windows-Security-Audit-Script/issues
-- **Discussions**: https://github.com/Sandler73/Windows-Security-Audit-Script/discussions
+- [Repository](https://github.com/Sandler73/Windows-Security-Audit-Project)
+- [Documentation](https://github.com/Sandler73/Windows-Security-Audit-Project/wiki)
+- [Issues](https://github.com/Sandler73/Windows-Security-Audit-Project/issues)
+- [Discussions](https://github.com/Sandler73/Windows-Security-Audit-Project/discussions)
 
 ---
 
