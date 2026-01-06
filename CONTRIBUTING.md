@@ -1,4 +1,4 @@
-# Contributing to Windows Security Audit Script
+# Contributing to Windows Security Audit Project Scripts
 
 Thank you for considering contributing to this project! This document provides guidelines for contributing to make the process smooth and effective for everyone.
 
@@ -36,8 +36,8 @@ We are committed to providing a welcoming and inclusive experience for everyone.
 ### Reporting Bugs
 
 **Before submitting a bug report:**
-1. Check the [Troubleshooting Guide](https://github.com/Sandler73/Windows-Security-Audit-Script/wiki/Troubleshooting)
-2. Search existing [Issues](https://github.com/Sandler73/Windows-Security-Audit-Script/issues) to avoid duplicates
+1. Check the [Troubleshooting Guide](https://github.com/Sandler73/Windows-Security-Audit-Project/wiki/Troubleshooting)
+2. Search existing [Issues](https://github.com/Sandler73/Windows-Security-Audit-Project/issues) to avoid duplicates
 3. Collect information about the bug
 
 **When submitting a bug report, include:**
@@ -123,8 +123,8 @@ Follow this process for contributions:
 
 1. **Fork and clone the repository:**
 ```powershell
-git clone https://github.com/YOUR-USERNAME/Windows-Security-Audit-Script.git
-cd Windows-Security-Audit-Script
+git clone https://github.com/Sandler73/Windows-Security-Audit-Project.git
+cd Windows-Security-Audit-Project
 ```
 
 2. **Install VS Code extensions (recommended):**
@@ -507,8 +507,8 @@ Always include framework references in Details:
 
 ## Questions?
 
-- **General questions:** [GitHub Discussions](https://github.com/Sandler73/Windows-Security-Audit-Script/discussions)
-- **Bugs/Features:** [GitHub Issues](https://github.com/Sandler73/Windows-Security-Audit-Script/issues)
+- **General questions:** [GitHub Discussions](https://github.com/Sandler73/Windows-Security-Audit-Project/discussions)
+- **Bugs/Features:** [GitHub Issues](https://github.com/Sandler73/Windows-Security-Audit-Project/issues)
 - **Security concerns:** Contact maintainers directly
 
 ---
